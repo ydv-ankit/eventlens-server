@@ -7,9 +7,9 @@ import { HTTP_CODE } from "./utils/constants";
 
 const app = express();
 
-
 // middlewares
 app.use(apiResponseMiddleware);
+app.use(express.json())
 
 const morganFormat = ":method :url :status :response-time ms";
 app.use(
