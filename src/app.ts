@@ -1,5 +1,6 @@
 import express from "express";
 import projectRoutes from "@/routes/project.route"
+import eventRoutes from "@/routes/event.route"
 import logger from "@/utils/logger";
 import morgan from "morgan";
 import { apiResponseMiddleware } from "@/utils/api-response";
@@ -34,6 +35,8 @@ app.get("/", (_, res) => {
 });
 
 app.use("/project", projectRoutes)
+
+app.use("/event", eventRoutes);
 
 app.use("/*path", (req, res)=> {
   res.error(HTTP_CODE.NOT_FOUND, "route not found")
