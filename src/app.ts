@@ -39,4 +39,9 @@ app.use("/*path", (req, res)=> {
   res.error(HTTP_CODE.NOT_FOUND, "route not found")
 })
 
+app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  logger.error(err.message);
+  res.error(HTTP_CODE.INTERNAL_SERVER_ERROR, "Internal server error");
+});
+
 export {app};

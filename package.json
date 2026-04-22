@@ -1,7 +1,7 @@
 {
-  "name": "server",
+  "name": "eventlens-server",
   "version": "1.0.0",
-  "description": "eventlens",
+  "description": "backend for eventlens project",
   "author": "Ankit Ydv",
   "license": "MIT",
   "scripts": {
