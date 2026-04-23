@@ -23,3 +23,5 @@ export const HTTP_CODE = {
     BAD_GATEWAY: 502,
     SERVICE_UNAVAILABLE: 503,
 }
+
+export const asyncQueueMaxLimit = 10000
