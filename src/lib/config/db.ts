@@ -8,7 +8,7 @@ const db = new Pool({
     password: "postgres",
     database: "eventlens",
     max: 10,
-    keepAlive: false
+    keepAlive: true
 });
 
 db.on("connect", () => logger.info("Database connection success"));
