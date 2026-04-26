@@ -21,7 +21,6 @@ const createProject = async (req: Request, res: Response, _next: NextFunction) =
         await db.query(query);
         res.success(HTTP_CODE.CREATED, "project created")
     } catch (error) {
-        console.log(error);
         res.error(HTTP_CODE.BAD_REQUEST, "error occured while creating project");
     }
 }

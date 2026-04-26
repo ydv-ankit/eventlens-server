@@ -1,37 +1,55 @@
 import db from "./lib/config/db";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
-import { BATCH_INSERTION_LIMIT, RETRY_COUNT_LIMIT, RETRY_QUEUE_LIMIT } from "./utils/constants";
+import { BATCH_INSERTION_LIMIT, MAIN_QUEUE_WORKERS_COUNT, RETRY_COUNT_LIMIT, RETRY_QUEUE_LIMIT } from "./utils/constants";
 import logger from "./utils/logger";
 
 export const asyncQueue = new Array<EventRequestData & {apiKey: string}>();
 const retryQueue = new Array<RetryQueue>();
+const ApiKeyToProjectIdCache = new Map<string, number>();
+
+const getProjectIdByApiKey = async (apiKey: string) => {
+    const projectId = ApiKeyToProjectIdCache.get(apiKey);
+    if (projectId){
+        return projectId;
+    }
+    const query = `
+        SELECT id FROM analytics.project
+        WHERE api_key = $1
+    `;
+    
+    const q = await db.query(query, [apiKey]);
+    if (q.rowCount === 1) {
+        const projectId = q.rows[0].id;
+        ApiKeyToProjectIdCache.set(apiKey, projectId);
+        return projectId;
+    }
+    return null;
+}
 
 // main queue worker
-;(async function () {
+async function mainQueueWorker () {
     while (true){
         const batchInsertionValues = new Array();
         if (asyncQueue.length === 0) {
+            logger.info("Empty queue");
             await new Promise((r)=> setTimeout(r, 50));
             continue;
+        }
+        // wait for short time to accumulate more events to leverage batching
+        if (asyncQueue.length < BATCH_INSERTION_LIMIT) {
+            await new Promise((r)=> setTimeout(r, 10));
         }
         try {
             for (let i = 0; i < BATCH_INSERTION_LIMIT; i++) {
                 const item = asyncQueue.shift();
                 if (!item) break;   // no items in queue
                 if (item?.apiKey) {
-                    const query = `
-                        SELECT id FROM analytics.project
-                        WHERE api_key = $1
-                    `;
-                    
-                    const q = await db.query(query, [item.apiKey]);
-                    
-                    if (q.rowCount === 1) {
-                        const projectId = q.rows[0].id;
-                        const values = [item?.event_name, item?.metadata, projectId, item?.user_id, item?.timestamp];
-                        batchInsertionValues.push(...values);
-                    }
+                    // using cache to avoid db lookup
+                    const projectId = await getProjectIdByApiKey(item.apiKey);
+                    if (!projectId) continue;
+                    const values = [item?.event_name, item?.metadata, projectId, item?.user_id, item?.timestamp];
+                    batchInsertionValues.push(...values);
                 } else {
                     logger.error("processing failed due to invalid apikey for item: " + JSON.stringify(item));
                 }
@@ -59,10 +77,10 @@ const retryQueue = new Array<RetryQueue>();
 
             await db.query(batchEventInsertQuery, batchInsertionValues);
         } catch (error) {
-            console.log(error);
             logger.error("failed to process queue items");
             // push this data into retry queue for processing again
-            batchInsertionValues.forEach((_, idx)=>{
+            const valuesLimit = Math.floor(batchInsertionValues.length / 5);
+            for (let idx = 0; idx < valuesLimit; idx++){
                 setTimeout(() => {
                     if(retryQueue.length < RETRY_QUEUE_LIMIT) {
                         retryQueue.push({
@@ -73,14 +91,13 @@ const retryQueue = new Array<RetryQueue>();
                         logger.error("Retry queue overflow, dropping events");
                     }
                 }, 100);
-            });
+            }
         }
     }
-})();
-
+}
 
 // retry queue worker
-;(async function() {
+async function retryQueueWorker() {
     while(true) {
         if (retryQueue.length === 0) {
             await new Promise((r) => setTimeout(r, 100));
@@ -115,4 +132,10 @@ const retryQueue = new Array<RetryQueue>();
             } as RetryQueue);
         }
     }
-})();
+}
+
+// initialize workers
+for (let i = 0; i < MAIN_QUEUE_WORKERS_COUNT; i++) {
+    mainQueueWorker();
+}
+retryQueueWorker();

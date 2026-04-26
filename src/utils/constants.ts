@@ -24,7 +24,8 @@ export const HTTP_CODE = {
     SERVICE_UNAVAILABLE: 503,
 }
 
-export const ASYNC_QUEUE_LIMIT = 10000
+export const ASYNC_QUEUE_LIMIT = 1_000_000  // 1 Million
 export const RETRY_QUEUE_LIMIT = 5000
 export const RETRY_COUNT_LIMIT = 3;
 export const BATCH_INSERTION_LIMIT = 100;
+export const MAIN_QUEUE_WORKERS_COUNT = 3;

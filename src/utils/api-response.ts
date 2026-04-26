@@ -1,4 +1,4 @@
-import { Request, Response, NextFunction } from "express";
+import express from "express";
 
 declare global {
     namespace Express {
@@ -9,12 +9,9 @@ declare global {
     }
 }
 
-export const apiResponseMiddleware = (_req: Request, res: Response, next: NextFunction) => {
-    res.success = (statusCode, message, data) => {
-        res.status(statusCode).json({ status: true, message, data });
-    };
-    res.error = (statusCode, message) => {
-        res.status(statusCode).json({ status: false, message });
-    };
-    next();
+express.response.success = function (statusCode, message, data) {
+    this.status(statusCode).json({ status: true, message, data });
+};
+express.response.error = function (statusCode, message) {
+    this.status(statusCode).json({ status: false, message });
 };

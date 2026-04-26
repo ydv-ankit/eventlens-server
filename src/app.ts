@@ -3,13 +3,12 @@ import projectRoutes from "@/routes/project.route"
 import eventRoutes from "@/routes/event.route"
 import logger from "@/utils/logger";
 import morgan from "morgan";
-import { apiResponseMiddleware } from "@/utils/api-response";
+import "@/utils/api-response";
 import { HTTP_CODE } from "./utils/constants";
 
 const app = express();
 
 // middlewares
-app.use(apiResponseMiddleware);
 app.use(express.json())
 
 const morganFormat = ":method :url :status :response-time ms";
