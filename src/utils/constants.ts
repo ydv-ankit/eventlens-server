@@ -24,8 +24,9 @@ export const HTTP_CODE = {
     SERVICE_UNAVAILABLE: 503,
 }
 
-export const ASYNC_QUEUE_LIMIT = 1_000_000  // 1 Million
-export const RETRY_QUEUE_LIMIT = 5000
-export const RETRY_COUNT_LIMIT = 3;
 export const BATCH_INSERTION_LIMIT = 100;
-export const MAIN_QUEUE_WORKERS_COUNT = 3;
+export const EVENT_QUEUE_KEY = "event_queue";
+export const EVENT_QUEUE_MAX_SIZE = 1_000_000_000;
+export const RETRY_COUNT_LIMIT = 3;
+export const RETRY_EVENT_QUEUE_KEY = "retry_event_queue"
+export const RETRY_EVENT_QUEUE_LIMIT = 5_000_000

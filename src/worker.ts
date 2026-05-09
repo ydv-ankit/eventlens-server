@@ -1,15 +1,14 @@
 import db from "./lib/config/db";
+import { redisClient, workerRedisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
-import { BATCH_INSERTION_LIMIT, MAIN_QUEUE_WORKERS_COUNT, RETRY_COUNT_LIMIT, RETRY_QUEUE_LIMIT } from "./utils/constants";
+import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT } from "./utils/constants";
 import logger from "./utils/logger";
 
-export const asyncQueue = new Array<EventRequestData & {apiKey: string}>();
 const retryQueue = new Array<RetryQueue>();
-const ApiKeyToProjectIdCache = new Map<string, number>();
 
 const getProjectIdByApiKey = async (apiKey: string) => {
-    const projectId = ApiKeyToProjectIdCache.get(apiKey);
+    const projectId = await redisClient.get(apiKey);
     if (projectId){
         return projectId;
     }
@@ -21,7 +20,12 @@ const getProjectIdByApiKey = async (apiKey: string) => {
     const q = await db.query(query, [apiKey]);
     if (q.rowCount === 1) {
         const projectId = q.rows[0].id;
-        ApiKeyToProjectIdCache.set(apiKey, projectId);
+        await redisClient.set(apiKey, projectId, {
+            expiration: {
+                type: "EX",
+                value: 5 * 60
+            }
+        });
         return projectId;
     }
     return null;
@@ -29,30 +33,25 @@ const getProjectIdByApiKey = async (apiKey: string) => {
 
 // main queue worker
 async function mainQueueWorker () {
+    logger.info("Starting main worker")
     while (true){
         const batchInsertionValues = new Array();
-        if (asyncQueue.length === 0) {
-            logger.info("Empty queue");
-            await new Promise((r)=> setTimeout(r, 50));
-            continue;
-        }
-        // wait for short time to accumulate more events to leverage batching
-        if (asyncQueue.length < BATCH_INSERTION_LIMIT) {
-            await new Promise((r)=> setTimeout(r, 10));
-        }
+        const result = (await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0));
+        if (!result) break;
+        const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
+        const projectId = await getProjectIdByApiKey(parsedResult.apiKey);
+        const values = [parsedResult.event_name, parsedResult.metadata, projectId, parsedResult.user_id, parsedResult.timestamp];
+        batchInsertionValues.push(...values);
         try {
-            for (let i = 0; i < BATCH_INSERTION_LIMIT; i++) {
-                const item = asyncQueue.shift();
-                if (!item) break;   // no items in queue
-                if (item?.apiKey) {
-                    // using cache to avoid db lookup
-                    const projectId = await getProjectIdByApiKey(item.apiKey);
-                    if (!projectId) continue;
-                    const values = [item?.event_name, item?.metadata, projectId, item?.user_id, item?.timestamp];
-                    batchInsertionValues.push(...values);
-                } else {
-                    logger.error("processing failed due to invalid apikey for item: " + JSON.stringify(item));
-                }
+            for (let i = 0; i < BATCH_INSERTION_LIMIT - 1; i++) {
+                const result = await workerRedisClient.LPOP(EVENT_QUEUE_KEY);
+                if (!result) break;
+                const parsedResult = JSON.parse(result) as EventRequestData & {apiKey: string};
+                // using cache to avoid db lookup
+                const projectId = await getProjectIdByApiKey(parsedResult.apiKey);
+                if (!projectId) continue;
+                const values = [parsedResult.event_name, parsedResult.metadata, projectId, parsedResult.user_id, parsedResult.timestamp];
+                batchInsertionValues.push(...values);
             }
 
             if (batchInsertionValues.length === 0) {
@@ -82,7 +81,7 @@ async function mainQueueWorker () {
             const valuesLimit = Math.floor(batchInsertionValues.length / 5);
             for (let idx = 0; idx < valuesLimit; idx++){
                 setTimeout(() => {
-                    if(retryQueue.length < RETRY_QUEUE_LIMIT) {
+                    if(retryQueue.length < RETRY_EVENT_QUEUE_LIMIT) {
                         retryQueue.push({
                             values: batchInsertionValues.slice(idx * 5, idx * 5 + 5),
                             retry_count: RETRY_COUNT_LIMIT
@@ -134,8 +133,8 @@ async function retryQueueWorker() {
     }
 }
 
-// initialize workers
-for (let i = 0; i < MAIN_QUEUE_WORKERS_COUNT; i++) {
+export const startWorkers = () => {
+    // initialize workers
     mainQueueWorker();
+    retryQueueWorker();
 }
-retryQueueWorker();
