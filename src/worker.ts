@@ -3,6 +3,7 @@ import { redisClient, workerRedisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
 import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT } from "./utils/constants";
+import { SQL_QUERIES } from "./utils/db/queries";
 import logger from "./utils/logger";
 
 const retryQueue = new Array<RetryQueue>();
@@ -12,12 +13,8 @@ const getProjectIdByApiKey = async (apiKey: string) => {
     if (projectId){
         return projectId;
     }
-    const query = `
-        SELECT id FROM analytics.project
-        WHERE api_key = $1
-    `;
     
-    const q = await db.query(query, [apiKey]);
+    const q = await db.query(SQL_QUERIES.GET_PROJECT_ID_BY_API_KEY, [apiKey]);
     if (q.rowCount === 1) {
         const projectId = q.rows[0].id;
         await redisClient.set(apiKey, projectId, {
@@ -59,22 +56,18 @@ async function mainQueueWorker () {
                 continue;
             }
             
-            let batchEventInsertQuery = `
-                INSERT INTO analytics.raw_event (event_name, metadata, project_id, user_id, timestamp)
-                VALUES 
-            `;
 
             const valuesLimit = Math.floor(batchInsertionValues.length / 5);
             for (let i = 0; i < valuesLimit; i++){
-                batchEventInsertQuery += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
+                SQL_QUERIES.BATCH_EVENT_INSERT += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
                 if (i === valuesLimit - 1) {
-                    batchEventInsertQuery += `;`;
+                    SQL_QUERIES.BATCH_EVENT_INSERT += `;`;
                 }else {
-                    batchEventInsertQuery += `,`;
+                    SQL_QUERIES.BATCH_EVENT_INSERT += `,`;
                 }
             }
 
-            await db.query(batchEventInsertQuery, batchInsertionValues);
+            await db.query(SQL_QUERIES.BATCH_EVENT_INSERT, batchInsertionValues);
         } catch (error) {
             logger.error("failed to process queue items");
             // push this data into retry queue for processing again
@@ -108,22 +101,17 @@ async function retryQueueWorker() {
             continue;
         }
         try {
-            let batchEventInsertQuery = `
-                INSERT INTO analytics.raw_event (event_name, metadata, project_id, user_id, timestamp)
-                VALUES 
-            `;
-
             const valuesLimit = Math.floor(Number(retryItem?.values?.length) / 5);
             for (let i = 0; i < valuesLimit; i++){
-                batchEventInsertQuery += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
+                SQL_QUERIES.BATCH_EVENT_INSERT += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
                 if (i === valuesLimit - 1) {
-                    batchEventInsertQuery += `;`;
+                    SQL_QUERIES.BATCH_EVENT_INSERT += `;`;
                 }else {
-                    batchEventInsertQuery += `,`;
+                    SQL_QUERIES.BATCH_EVENT_INSERT += `,`;
                 }
             }
 
-            await db.query(batchEventInsertQuery, retryItem?.values);
+            await db.query(SQL_QUERIES.BATCH_EVENT_INSERT, retryItem?.values);
         } catch (error) {
             retryQueue.push({
                 values: retryItem?.values,
