@@ -24,7 +24,7 @@ export const HTTP_CODE = {
     SERVICE_UNAVAILABLE: 503,
 }
 
-export const BATCH_INSERTION_LIMIT = 100;
+export const BATCH_INSERTION_LIMIT = 500;
 export const EVENT_QUEUE_KEY = "event_queue";
 export const EVENT_QUEUE_MAX_SIZE = 1_000_000_000;
 export const RETRY_COUNT_LIMIT = 3;

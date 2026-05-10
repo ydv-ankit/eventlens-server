@@ -1,5 +1,6 @@
+import { createClient } from "redis";
 import db from "./lib/config/db";
-import { redisClient, workerRedisClient } from "./lib/config/redis";
+import { getRedisClient, redisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
 import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT } from "./utils/constants";
@@ -29,19 +30,19 @@ const getProjectIdByApiKey = async (apiKey: string) => {
 }
 
 // main queue worker
-async function mainQueueWorker () {
+async function mainQueueWorker (redisClient: any) {
     logger.info("Starting main worker")
     while (true){
         const batchInsertionValues = new Array();
-        const result = (await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0));
-        if (!result) break;
-        const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
-        const projectId = await getProjectIdByApiKey(parsedResult.apiKey);
-        const values = [parsedResult.event_name, parsedResult.metadata, projectId, parsedResult.user_id, parsedResult.timestamp];
-        batchInsertionValues.push(...values);
         try {
+            const result = (await redisClient.BLPOP(EVENT_QUEUE_KEY, 0));
+            if (!result) break;
+            const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
+            const projectId = await getProjectIdByApiKey(parsedResult.apiKey);
+            const values = [parsedResult.event_name, parsedResult.metadata, projectId, parsedResult.user_id, parsedResult.timestamp];
+            batchInsertionValues.push(...values);
             for (let i = 0; i < BATCH_INSERTION_LIMIT - 1; i++) {
-                const result = await workerRedisClient.LPOP(EVENT_QUEUE_KEY);
+                const result = await redisClient.LPOP(EVENT_QUEUE_KEY);
                 if (!result) break;
                 const parsedResult = JSON.parse(result) as EventRequestData & {apiKey: string};
                 // using cache to avoid db lookup
@@ -56,20 +57,21 @@ async function mainQueueWorker () {
                 continue;
             }
             
-
+            let query = SQL_QUERIES.BATCH_EVENT_INSERT;
             const valuesLimit = Math.floor(batchInsertionValues.length / 5);
             for (let i = 0; i < valuesLimit; i++){
-                SQL_QUERIES.BATCH_EVENT_INSERT += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
+                query += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
                 if (i === valuesLimit - 1) {
-                    SQL_QUERIES.BATCH_EVENT_INSERT += `;`;
+                    query += `;`;
                 }else {
-                    SQL_QUERIES.BATCH_EVENT_INSERT += `,`;
+                    query += `,`;
                 }
             }
-
-            await db.query(SQL_QUERIES.BATCH_EVENT_INSERT, batchInsertionValues);
+            
+            await db.query(query, batchInsertionValues);
         } catch (error) {
-            logger.error("failed to process queue items");
+            console.log(error);
+            logger.error("failed to process queue items" + error);
             // push this data into retry queue for processing again
             const valuesLimit = Math.floor(batchInsertionValues.length / 5);
             for (let idx = 0; idx < valuesLimit; idx++){
@@ -101,13 +103,14 @@ async function retryQueueWorker() {
             continue;
         }
         try {
+            let query = SQL_QUERIES.BATCH_EVENT_INSERT;
             const valuesLimit = Math.floor(Number(retryItem?.values?.length) / 5);
             for (let i = 0; i < valuesLimit; i++){
-                SQL_QUERIES.BATCH_EVENT_INSERT += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
+                query += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
                 if (i === valuesLimit - 1) {
-                    SQL_QUERIES.BATCH_EVENT_INSERT += `;`;
+                    query += `;`;
                 }else {
-                    SQL_QUERIES.BATCH_EVENT_INSERT += `,`;
+                    query += `,`;
                 }
             }
 
@@ -121,8 +124,16 @@ async function retryQueueWorker() {
     }
 }
 
-export const startWorkers = () => {
+export const startWorkers = async () => {
     // initialize workers
-    mainQueueWorker();
+    const client1 = getRedisClient();
+    const client2 = getRedisClient();
+    const client3 = getRedisClient();
+    await client1.connect();
+    await client2.connect();
+    await client3.connect();
+    mainQueueWorker(client1);
+    mainQueueWorker(client2);
+    mainQueueWorker(client3);
     retryQueueWorker();
 }
