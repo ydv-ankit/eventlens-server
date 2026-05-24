@@ -1,10 +1,12 @@
 import express from "express";
 import projectRoutes from "@/routes/project.route"
 import eventRoutes from "@/routes/event.route"
+import metricRoutes from "@/routes/metric.route"
 import logger from "@/utils/logger";
 import morgan from "morgan";
 import "@/utils/api-response";
-import { HTTP_CODE } from "./utils/constants";
+import { HTTP_CODE, TOTAL_REQUESTS } from "./utils/constants";
+import { redisClient } from "./lib/config/redis";
 
 const app = express();
 
@@ -28,6 +30,20 @@ app.use(
   })
 );
 
+app.use(
+  async (
+    req: express.Request, 
+    res: express.Response, 
+    next: express.NextFunction
+  ) => {
+    try{
+      await redisClient.incr(TOTAL_REQUESTS);
+    } finally{
+      next()
+    }
+  }
+)
+
 // routes
 app.get("/", (_, res) => {
   res.success(HTTP_CODE.OK, "hello there")
@@ -36,6 +52,8 @@ app.get("/", (_, res) => {
 app.use("/project", projectRoutes)
 
 app.use("/event", eventRoutes);
+
+app.use("/metrics", metricRoutes);
 
 app.use("/*path", (req, res)=> {
   res.error(HTTP_CODE.NOT_FOUND, "route not found")

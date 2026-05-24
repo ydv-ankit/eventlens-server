@@ -2,7 +2,7 @@ import db from "./lib/config/db";
 import { AppRedisClient, ensureRedisConnection, getRedisClient, redisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
-import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, REDIS_RETRY_DELAY_MS, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT, RETRY_QUEUE_FAILED_RETRY_DELAY } from "./utils/constants";
+import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, FAILED_INSERTION_COUNT, REDIS_RETRY_DELAY_MS, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT, RETRY_QUEUE_FAILED_RETRY_DELAY, TOTAL_EVENTS_PROCESSED } from "./utils/constants";
 import { SQL_QUERIES } from "./utils/db/queries";
 import logger from "./utils/logger";
 
@@ -82,6 +82,7 @@ async function mainQueueWorker (workerRedisClient: AppRedisClient, workerName: s
             }
             
             await db.query(query, batchInsertionValues);
+            await redisClient.incrBy(TOTAL_EVENTS_PROCESSED, valuesLimit);
         } catch (error) {
             logger.error(`${workerName} failed to process queue items: ${String(error)}`);
             // push this data into retry queue for processing again
@@ -141,6 +142,7 @@ async function retryQueueWorker() {
                 values: retryItem?.values,
                 retry_count
             } as RetryQueue);
+            await redisClient.incr(FAILED_INSERTION_COUNT);
         }
     }
 }
@@ -148,15 +150,15 @@ async function retryQueueWorker() {
 export const startWorkers = async () => {
     // initialize workers
     const client1 = getRedisClient("Worker-1");
-    const client2 = getRedisClient("Worker-2");
-    const client3 = getRedisClient("Worker-3");
+    // const client2 = getRedisClient("Worker-2");
+    // const client3 = getRedisClient("Worker-3");
 
     void ensureRedisConnection(client1, "Worker-1");
-    void ensureRedisConnection(client2, "Worker-2");
-    void ensureRedisConnection(client3, "Worker-3");
+    // void ensureRedisConnection(client2, "Worker-2");
+    // void ensureRedisConnection(client3, "Worker-3");
 
     void mainQueueWorker(client1, "Worker-1");
-    void mainQueueWorker(client2, "Worker-2");
-    void mainQueueWorker(client3, "Worker-3");
+    // void mainQueueWorker(client2, "Worker-2");
+    // void mainQueueWorker(client3, "Worker-3");
     void retryQueueWorker();
 }
