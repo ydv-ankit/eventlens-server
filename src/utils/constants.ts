@@ -30,3 +30,5 @@ export const EVENT_QUEUE_MAX_SIZE = 1_000_000_000;
 export const RETRY_COUNT_LIMIT = 3;
 export const RETRY_EVENT_QUEUE_KEY = "retry_event_queue"
 export const RETRY_EVENT_QUEUE_LIMIT = 5_000_000
+export const RETRY_QUEUE_FAILED_RETRY_DELAY = 1_000;
+export const REDIS_RETRY_DELAY_MS = 2_000;

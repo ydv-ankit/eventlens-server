@@ -2,12 +2,11 @@ import db from "./lib/config/db";
 import { AppRedisClient, ensureRedisConnection, getRedisClient, redisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
-import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT } from "./utils/constants";
+import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, REDIS_RETRY_DELAY_MS, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT, RETRY_QUEUE_FAILED_RETRY_DELAY } from "./utils/constants";
 import { SQL_QUERIES } from "./utils/db/queries";
 import logger from "./utils/logger";
 
 const retryQueue = new Array<RetryQueue>();
-const REDIS_RETRY_DELAY_MS = 2_000;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const getProjectIdByApiKey = async (apiKey: string) => {
@@ -129,10 +128,18 @@ async function retryQueueWorker() {
             }
 
             await db.query(SQL_QUERIES.BATCH_EVENT_INSERT, retryItem?.values);
-        } catch (error) {
+        } catch (error: any) {
+            logger.error("{retry queue error} " + error);
+            let retry_count = RETRY_COUNT_LIMIT;
+            // db down
+            if ((error as Error).message.includes("getaddrinfo ENOTFOUND db")){
+                retry_count = retryItem!.retry_count;
+            } else {
+                retry_count = retryItem!.retry_count - 1;
+            }
             retryQueue.push({
                 values: retryItem?.values,
-                retry_count: retryItem!.retry_count - 1
+                retry_count
             } as RetryQueue);
         }
     }
