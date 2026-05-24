@@ -10,6 +10,11 @@ import { batchInsertionsGauge, failedInsertionsCounter, totalEventsProcessedCoun
 const retryQueue = new Array<RetryQueue>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+setInterval(() => {
+    batchInsertionsGauge.set(0);
+    failedInsertionsCounter.set(0)
+}, 1000);
+
 const getProjectIdByApiKey = async (apiKey: string) => {
     if (redisClient.isReady) {
         const projectId = await redisClient.get(apiKey);
@@ -49,7 +54,6 @@ async function mainQueueWorker (workerRedisClient: AppRedisClient, workerName: s
             const result = (await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0));
             if (!result) {
                 await sleep(REDIS_RETRY_DELAY_MS);
-                batchInsertionsGauge.set(0);
                 continue;
             }
             const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
