@@ -7,6 +7,7 @@ import morgan from "morgan";
 import "@/utils/api-response";
 import { HTTP_CODE, TOTAL_REQUESTS } from "./utils/constants";
 import { redisClient } from "./lib/config/redis";
+import { failedRequestsCounter, totalRequestsCounter } from "./utils/monitoring/prom";
 
 const app = express();
 
@@ -36,6 +37,13 @@ app.use(
     res: express.Response, 
     next: express.NextFunction
   ) => {
+    res.on("finish", () => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        failedRequestsCounter.inc();
+      }
+    });
+
+    totalRequestsCounter.inc();
     try{
       await redisClient.incr(TOTAL_REQUESTS);
     } finally{

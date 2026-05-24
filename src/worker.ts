@@ -5,6 +5,7 @@ import { RetryQueue } from "./types/types";
 import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, FAILED_INSERTION_COUNT, REDIS_RETRY_DELAY_MS, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT, RETRY_QUEUE_FAILED_RETRY_DELAY, TOTAL_EVENTS_PROCESSED } from "./utils/constants";
 import { SQL_QUERIES } from "./utils/db/queries";
 import logger from "./utils/logger";
+import { batchInsertionsGauge, failedInsertionsCounter, totalEventsProcessedCounter } from "./utils/monitoring/prom";
 
 const retryQueue = new Array<RetryQueue>();
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,6 +49,7 @@ async function mainQueueWorker (workerRedisClient: AppRedisClient, workerName: s
             const result = (await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0));
             if (!result) {
                 await sleep(REDIS_RETRY_DELAY_MS);
+                batchInsertionsGauge.set(0);
                 continue;
             }
             const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
@@ -82,7 +84,9 @@ async function mainQueueWorker (workerRedisClient: AppRedisClient, workerName: s
             }
             
             await db.query(query, batchInsertionValues);
-            await redisClient.incrBy(TOTAL_EVENTS_PROCESSED, valuesLimit);
+            totalEventsProcessedCounter.inc(valuesLimit)
+            batchInsertionsGauge.set(valuesLimit)
+            redisClient.isReady && await redisClient.incrBy(TOTAL_EVENTS_PROCESSED, valuesLimit);
         } catch (error) {
             logger.error(`${workerName} failed to process queue items: ${String(error)}`);
             // push this data into retry queue for processing again
@@ -143,6 +147,7 @@ async function retryQueueWorker() {
                 retry_count
             } as RetryQueue);
             await redisClient.incr(FAILED_INSERTION_COUNT);
+            failedInsertionsCounter.set(retryQueue.length);
         }
     }
 }
