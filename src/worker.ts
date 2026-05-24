@@ -1,6 +1,5 @@
-import { createClient } from "redis";
 import db from "./lib/config/db";
-import { getRedisClient, redisClient } from "./lib/config/redis";
+import { AppRedisClient, ensureRedisConnection, getRedisClient, redisClient } from "./lib/config/redis";
 import { EventRequestData } from "./types/api";
 import { RetryQueue } from "./types/types";
 import { BATCH_INSERTION_LIMIT, EVENT_QUEUE_KEY, RETRY_COUNT_LIMIT, RETRY_EVENT_QUEUE_LIMIT } from "./utils/constants";
@@ -8,41 +7,56 @@ import { SQL_QUERIES } from "./utils/db/queries";
 import logger from "./utils/logger";
 
 const retryQueue = new Array<RetryQueue>();
+const REDIS_RETRY_DELAY_MS = 2_000;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const getProjectIdByApiKey = async (apiKey: string) => {
-    const projectId = await redisClient.get(apiKey);
-    if (projectId){
-        return projectId;
+    if (redisClient.isReady) {
+        const projectId = await redisClient.get(apiKey);
+        if (projectId){
+            return projectId;
+        }
     }
     
     const q = await db.query(SQL_QUERIES.GET_PROJECT_ID_BY_API_KEY, [apiKey]);
     if (q.rowCount === 1) {
         const projectId = q.rows[0].id;
-        await redisClient.set(apiKey, projectId, {
-            expiration: {
-                type: "EX",
-                value: 5 * 60
-            }
-        });
+        if (redisClient.isReady) {
+            await redisClient.set(apiKey, projectId, {
+                expiration: {
+                    type: "EX",
+                    value: 5 * 60
+                }
+            });
+        }
         return projectId;
     }
     return null;
 }
 
 // main queue worker
-async function mainQueueWorker (redisClient: any) {
-    logger.info("Starting main worker")
+async function mainQueueWorker (workerRedisClient: AppRedisClient, workerName: string) {
+    logger.info(`Starting ${workerName}`)
     while (true){
         const batchInsertionValues = new Array();
         try {
-            const result = (await redisClient.BLPOP(EVENT_QUEUE_KEY, 0));
-            if (!result) break;
+            await ensureRedisConnection(workerRedisClient, workerName);
+            if (!workerRedisClient.isReady) {
+                await sleep(REDIS_RETRY_DELAY_MS);
+                continue;
+            }
+
+            const result = (await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0));
+            if (!result) {
+                await sleep(REDIS_RETRY_DELAY_MS);
+                continue;
+            }
             const parsedResult = JSON.parse(result.element) as EventRequestData & {apiKey: string};
             const projectId = await getProjectIdByApiKey(parsedResult.apiKey);
             const values = [parsedResult.event_name, parsedResult.metadata, projectId, parsedResult.user_id, parsedResult.timestamp];
             batchInsertionValues.push(...values);
             for (let i = 0; i < BATCH_INSERTION_LIMIT - 1; i++) {
-                const result = await redisClient.LPOP(EVENT_QUEUE_KEY);
+                const result = await workerRedisClient.LPOP(EVENT_QUEUE_KEY);
                 if (!result) break;
                 const parsedResult = JSON.parse(result) as EventRequestData & {apiKey: string};
                 // using cache to avoid db lookup
@@ -70,8 +84,7 @@ async function mainQueueWorker (redisClient: any) {
             
             await db.query(query, batchInsertionValues);
         } catch (error) {
-            console.log(error);
-            logger.error("failed to process queue items" + error);
+            logger.error(`${workerName} failed to process queue items: ${String(error)}`);
             // push this data into retry queue for processing again
             const valuesLimit = Math.floor(batchInsertionValues.length / 5);
             for (let idx = 0; idx < valuesLimit; idx++){
@@ -86,6 +99,7 @@ async function mainQueueWorker (redisClient: any) {
                     }
                 }, 100);
             }
+            await sleep(REDIS_RETRY_DELAY_MS);
         }
     }
 }
@@ -126,14 +140,16 @@ async function retryQueueWorker() {
 
 export const startWorkers = async () => {
     // initialize workers
-    const client1 = getRedisClient();
-    const client2 = getRedisClient();
-    const client3 = getRedisClient();
-    await client1.connect();
-    await client2.connect();
-    await client3.connect();
-    mainQueueWorker(client1);
-    mainQueueWorker(client2);
-    mainQueueWorker(client3);
-    retryQueueWorker();
+    const client1 = getRedisClient("Worker-1");
+    const client2 = getRedisClient("Worker-2");
+    const client3 = getRedisClient("Worker-3");
+
+    void ensureRedisConnection(client1, "Worker-1");
+    void ensureRedisConnection(client2, "Worker-2");
+    void ensureRedisConnection(client3, "Worker-3");
+
+    void mainQueueWorker(client1, "Worker-1");
+    void mainQueueWorker(client2, "Worker-2");
+    void mainQueueWorker(client3, "Worker-3");
+    void retryQueueWorker();
 }

@@ -4,17 +4,46 @@ import { createClient } from 'redis';
 
 const redisUrl = `redis://${ENV.REDIS_HOST}:${ENV.REDIS_PORT}`
 
-const getRedisClient =  () => createClient({
-    url: redisUrl
+const createRedisClient = () => createClient({
+    url: redisUrl,
+    socket: {
+        reconnectStrategy: (retries) => Math.min(retries * 250, 5_000)
+    }
 });
 
-const redisClient = getRedisClient();
+export type AppRedisClient = ReturnType<typeof createRedisClient>;
 
-redisClient.on('error', (err) => console.log(err));
-redisClient.on('connect', () => logger.info('Main Redis Client Connected'));
+const attachRedisLogging = (client: AppRedisClient, name: string) => {
+    client.on('error', (err) => logger.error(`${name} Redis error: ${err.message}`));
+    client.on('connect', () => logger.info(`${name} Redis socket connected`));
+    client.on('ready', () => logger.info(`${name} Redis client ready`));
+    client.on('reconnecting', () => logger.info(`${name} Redis reconnecting`));
+    client.on('end', () => logger.info(`${name} Redis connection closed`));
+};
+
+const getRedisClient = (name = "Worker") => {
+    const client = createRedisClient();
+    attachRedisLogging(client, name);
+    return client;
+};
+
+const redisClient = getRedisClient("Main");
+
+const ensureRedisConnection = async (client: AppRedisClient, name: string) => {
+    if (client.isReady || client.isOpen) {
+        return;
+    }
+
+    try {
+        await client.connect();
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`${name} Redis connect failed: ${message}`);
+    }
+};
 
 export const connectRedis = async () => {
-    await redisClient.connect();
+    await ensureRedisConnection(redisClient, "Main");
 }
 
-export {getRedisClient, redisClient};
+export {ensureRedisConnection, getRedisClient, redisClient};

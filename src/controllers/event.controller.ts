@@ -9,6 +9,10 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
         const data = req.body as EventRequestData;
         const apiKey = req.headers.authorization?.split(" ")[1];
         if (!apiKey) throw new Error("API_KEY not found");
+        if (!redisClient.isReady) {
+            res.error(HTTP_CODE.SERVICE_UNAVAILABLE, "event ingestion queue unavailable")
+            return
+        }
         if (await redisClient.lLen(EVENT_QUEUE_KEY) >= EVENT_QUEUE_MAX_SIZE) {
             logger.error("Queue limit reached to max limit of " + EVENT_QUEUE_MAX_SIZE)
             res.error(HTTP_CODE.TOO_MANY_REQUESTS, "retry after some time")
@@ -23,7 +27,12 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
         }))
         res.success(HTTP_CODE.OK, "event accepted")
     } catch (error) {
-        res.error(HTTP_CODE.BAD_REQUEST, "error occured while creating project");
+        logger.error("failed to enqueue event: " + String(error));
+        const statusCode = redisClient.isReady ? HTTP_CODE.BAD_REQUEST : HTTP_CODE.SERVICE_UNAVAILABLE;
+        const message = redisClient.isReady
+            ? "error occured while enqueueing event"
+            : "event ingestion queue unavailable";
+        res.error(statusCode, message);
     }
 }
 
