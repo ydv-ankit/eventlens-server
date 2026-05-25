@@ -7,7 +7,11 @@ import {
 } from "@/utils/constants";
 import logger from "@/utils/logger";
 import { NextFunction, Request, Response } from "express";
-import opentelemetry, { SpanStatusCode, context, propagation } from "@opentelemetry/api";
+import opentelemetry, {
+  SpanStatusCode,
+  context,
+  propagation,
+} from "@opentelemetry/api";
 
 const tracer = opentelemetry.trace.getTracer("eventlens-event-controller");
 
@@ -61,7 +65,7 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
             "db.redis.key": EVENT_QUEUE_KEY,
           });
 
-          const traceContext = {}
+          const traceContext = {};
           propagation.inject(context.active(), traceContext);
           await redisClient.lPush(
             EVENT_QUEUE_KEY,
@@ -74,7 +78,7 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
                 timestamp: data.timestamp,
               },
               trace: traceContext,
-              queueAt: Date.now()
+              queueAt: Date.now(),
             }),
           );
 

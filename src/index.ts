@@ -3,36 +3,37 @@ import { ENV } from "./utils/env";
 import { opentelemetrySDK } from "./lib/instrumentation";
 
 const PORT = Number(ENV.APP_PORT || 8080);
-const HOST = "0.0.0.0"
+const HOST = "0.0.0.0";
 
 async function bootstrap() {
-    try {
-        opentelemetrySDK.start();
+  try {
+    opentelemetrySDK.start();
 
-        const [{ app }, { seedDatabase }, { connectRedis }, { startWorkers }] = await Promise.all([
-            import("@/app"),
-            import("@/utils/db/seed-db"),
-            import("./lib/config/redis"),
-            import("./worker"),
-        ]);
+    const [{ app }, { seedDatabase }, { connectRedis }, { startWorkers }] =
+      await Promise.all([
+        import("@/app"),
+        import("@/utils/db/seed-db"),
+        import("./lib/config/redis"),
+        import("./worker"),
+      ]);
 
-        await seedDatabase();
+    await seedDatabase();
 
-        app.listen(PORT, HOST, 4096, () => {
-            logger.info(`⚙️ Server listening on port: ${PORT}`);
-        });
+    app.listen(PORT, HOST, 4096, () => {
+      logger.info(`⚙️ Server listening on port: ${PORT}`);
+    });
 
-        await connectRedis();
-        await startWorkers();
-    } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        logger.error("Server bootstrap failed: " + message);
-        process.exit(1);
-    }
+    await connectRedis();
+    await startWorkers();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error("Server bootstrap failed: " + message);
+    process.exit(1);
+  }
 }
 
 void bootstrap();
 
 process.on("unhandledRejection", (reason) => {
-    logger.error("Unhandled rejection: " + String(reason));
+  logger.error("Unhandled rejection: " + String(reason));
 });

@@ -6,5 +6,5 @@ export type RetryQueue = {
 export type RedisEvent = {
   event: EventRequestData & { apiKey: string };
   trace: { traceparent?: string; tracestate?: string };
-  queueAt: Number
+  queueAt: Number;
 };

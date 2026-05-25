@@ -149,7 +149,7 @@ async function mainQueueWorker(
       const workerSpan = tracer.startSpan("worker.batch", { links });
       workerSpan.setAttribute(
         "queue.wait.ms",
-        Date.now() - Number(parsedResult.queueAt)
+        Date.now() - Number(parsedResult.queueAt),
       );
       const workerContext = opentelemetry.trace.setSpan(
         context.active(),

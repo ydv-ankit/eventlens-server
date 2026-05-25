@@ -1,13 +1,16 @@
 import express from "express";
-import projectRoutes from "@/routes/project.route"
-import eventRoutes from "@/routes/event.route"
-import metricRoutes from "@/routes/metric.route"
+import projectRoutes from "@/routes/project.route";
+import eventRoutes from "@/routes/event.route";
+import metricRoutes from "@/routes/metric.route";
 import logger from "@/utils/logger";
 import morgan from "morgan";
 import "@/utils/api-response";
 import { HTTP_CODE, TOTAL_REQUESTS } from "./utils/constants";
 import { redisClient } from "./lib/config/redis";
-import { failedRequestsCounter, totalRequestsCounter } from "./utils/monitoring/prom";
+import {
+  failedRequestsCounter,
+  totalRequestsCounter,
+} from "./utils/monitoring/prom";
 import opentelemetry, { SpanStatusCode, trace } from "@opentelemetry/api";
 
 const app = express();
@@ -15,7 +18,7 @@ const tracer = opentelemetry.trace.getTracer("eventlens-http");
 const UNTRACED_ROUTES = new Set(["/metrics"]);
 
 // middlewares
-app.use(express.json())
+app.use(express.json());
 
 const morganFormat = ":method :url :status :response-time ms";
 app.use(
@@ -31,20 +34,17 @@ app.use(
         logger.info(JSON.stringify(logObject));
       },
     },
-  })
+  }),
 );
 
 app.use(
   async (
-    req: express.Request, 
-    res: express.Response, 
-    next: express.NextFunction
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
   ) => {
     // exclude certain requests
-    if (
-      req.method === "GET" 
-      && UNTRACED_ROUTES.has(req.path)
-    ) {
+    if (req.method === "GET" && UNTRACED_ROUTES.has(req.path)) {
       next();
       return;
     }
@@ -83,35 +83,45 @@ app.use(
       }
     });
 
-    return opentelemetry.context.with(trace.setSpan(opentelemetry.context.active(), requestSpan), async () => {
-      totalRequestsCounter.inc();
-      try{
-        await redisClient.incr(TOTAL_REQUESTS);
-      } finally {
-        next()
-      }
-    });
-  }
-)
+    return opentelemetry.context.with(
+      trace.setSpan(opentelemetry.context.active(), requestSpan),
+      async () => {
+        totalRequestsCounter.inc();
+        try {
+          await redisClient.incr(TOTAL_REQUESTS);
+        } finally {
+          next();
+        }
+      },
+    );
+  },
+);
 
 // routes
 app.get("/", (_, res) => {
-  res.success(HTTP_CODE.OK, "hello there")
+  res.success(HTTP_CODE.OK, "hello there");
 });
 
-app.use("/project", projectRoutes)
+app.use("/project", projectRoutes);
 
 app.use("/event", eventRoutes);
 
 app.use("/metrics", metricRoutes);
 
-app.use("/*path", (req, res)=> {
-  res.error(HTTP_CODE.NOT_FOUND, "route not found")
-})
-
-app.use((err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  logger.error(err.message);
-  res.error(HTTP_CODE.INTERNAL_SERVER_ERROR, "Internal server error");
+app.use("/*path", (req, res) => {
+  res.error(HTTP_CODE.NOT_FOUND, "route not found");
 });
 
-export {app};
+app.use(
+  (
+    err: Error,
+    _req: express.Request,
+    res: express.Response,
+    _next: express.NextFunction,
+  ) => {
+    logger.error(err.message);
+    res.error(HTTP_CODE.INTERNAL_SERVER_ERROR, "Internal server error");
+  },
+);
+
+export { app };
