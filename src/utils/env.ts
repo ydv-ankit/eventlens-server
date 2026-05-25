@@ -11,5 +11,6 @@ export const ENV = {
     DB_NAME: process.env.DB_NAME,
     DB_MAX_CONNECTIONS: Number(process.env.DB_MAX_CONNECTIONS || 10),
     REDIS_HOST: process.env.REDIS_HOST,
-    REDIS_PORT: process.env.REDIS_PORT
+    REDIS_PORT: process.env.REDIS_PORT,
+    OTLP_TRACE_EXPORTER: process.env.OTLP_TRACE_EXPORTER
 }

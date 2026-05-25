@@ -64,6 +64,12 @@ services:
     - ./tools/prometheus.yml:/etc/prometheus/prometheus.yml
     restart: unless-stopped
 
+  jaeger:
+    image: jaegertracing/all-in-one
+    ports:
+      - "4318:4318"
+      - "16686:16686"
+    restart: unless-stopped
 
 volumes:
   db_data:

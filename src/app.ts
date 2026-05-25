@@ -8,8 +8,11 @@ import "@/utils/api-response";
 import { HTTP_CODE, TOTAL_REQUESTS } from "./utils/constants";
 import { redisClient } from "./lib/config/redis";
 import { failedRequestsCounter, totalRequestsCounter } from "./utils/monitoring/prom";
+import opentelemetry, { SpanStatusCode, trace } from "@opentelemetry/api";
 
 const app = express();
+const tracer = opentelemetry.trace.getTracer("eventlens-http");
+const UNTRACED_ROUTES = new Set(["/metrics"]);
 
 // middlewares
 app.use(express.json())
@@ -37,18 +40,57 @@ app.use(
     res: express.Response, 
     next: express.NextFunction
   ) => {
+    // exclude certain requests
+    if (
+      req.method === "GET" 
+      && UNTRACED_ROUTES.has(req.path)
+    ) {
+      next();
+      return;
+    }
+
+    const requestSpan = tracer.startSpan(`HTTP ${req.method} ${req.path}`, {
+      attributes: {
+        "http.method": req.method,
+        "http.route": req.path,
+        "http.target": req.originalUrl,
+      },
+    });
+    let spanEnded = false;
+
+    const endSpan = () => {
+      if (spanEnded) return;
+      spanEnded = true;
+
+      requestSpan.setAttribute("http.status_code", res.statusCode);
+      if (res.statusCode >= 400) {
+        requestSpan.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: `HTTP ${res.statusCode}`,
+        });
+      } else {
+        requestSpan.setStatus({ code: SpanStatusCode.OK });
+      }
+      requestSpan.end();
+    };
+
+    res.on("finish", endSpan);
+    res.on("close", endSpan);
+
     res.on("finish", () => {
       if (res.statusCode < 200 || res.statusCode >= 300) {
         failedRequestsCounter.inc();
       }
     });
 
-    totalRequestsCounter.inc();
-    try{
-      await redisClient.incr(TOTAL_REQUESTS);
-    } finally{
-      next()
-    }
+    return opentelemetry.context.with(trace.setSpan(opentelemetry.context.active(), requestSpan), async () => {
+      totalRequestsCounter.inc();
+      try{
+        await redisClient.incr(TOTAL_REQUESTS);
+      } finally {
+        next()
+      }
+    });
   }
 )
 
