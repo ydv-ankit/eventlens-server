@@ -10,7 +10,7 @@ import {
   ATTR_SERVICE_VERSION,
 } from "@opentelemetry/semantic-conventions";
 import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
-import { ENV } from "@/utils/env";
+import { ENV } from "@/shared/utils/env";
 
 export const opentelemetrySDK = new NodeSDK({
   resource: resourceFromAttributes({

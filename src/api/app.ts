@@ -1,16 +1,16 @@
 import express from "express";
-import projectRoutes from "@/routes/project.route";
-import eventRoutes from "@/routes/event.route";
-import metricRoutes from "@/routes/metric.route";
-import logger from "@/utils/logger";
+import projectRoutes from "@/api/routes/project.route";
+import eventRoutes from "@/api/routes/event.route";
+import metricRoutes from "@/api/routes/metric.route";
+import logger from "@/shared/utils/logger";
 import morgan from "morgan";
-import "@/utils/api-response";
-import { HTTP_CODE, TOTAL_REQUESTS } from "./utils/constants";
-import { redisClient } from "./lib/config/redis";
+import "@/shared/utils/api-response";
+import { HTTP_CODE, TOTAL_REQUESTS } from "@/shared/utils/constants";
+import { redisClient } from "@/shared/lib/config/redis";
 import {
   failedRequestsCounter,
   totalRequestsCounter,
-} from "./utils/monitoring/prom";
+} from "@/shared/utils/monitoring/prom";
 import opentelemetry, { SpanStatusCode, trace } from "@opentelemetry/api";
 
 const app = express();

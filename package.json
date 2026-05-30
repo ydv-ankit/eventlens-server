@@ -6,10 +6,12 @@
   "main": "index.js",
   "license": "MIT",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev:server": "tsx watch src/api/index.ts",
+    "dev:worker": "tsx watch src/worker/index.ts",
     "prebuild": "rimraf dist",
     "build": "tsc && tsc-alias",
-    "start": "node dist/index.js",
+    "start:server": "node dist/api/index.js",
+    "start:worker": "node dist/index.js",
     "prepare": "husky || true"
   },
   "lint-staged": {

@@ -1,4 +1,4 @@
-import { createProject } from "@/controllers/project.controller";
+import { createProject } from "@/api/controllers/project.controller";
 import { Router } from "express";
 
 const router = Router();

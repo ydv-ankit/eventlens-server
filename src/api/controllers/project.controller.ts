@@ -1,5 +1,5 @@
-import db from "@/lib/config/db";
-import { HTTP_CODE } from "@/utils/constants";
+import db from "@/shared/lib/config/db";
+import { HTTP_CODE } from "@/shared/utils/constants";
 import { randomUUID } from "crypto";
 import { NextFunction, Request, Response } from "express";
 
@@ -17,6 +17,7 @@ const createProject = async (
     if (!data.name || data.name === "") {
       throw Error("project name is required");
     }
+    // TODO: change userId to actual user's id
     const query = `
             INSERT INTO analytics.project(name, api_key, user_id) 
             VALUES('${data.name}', '${generateProjectAPIKey()}', 1);

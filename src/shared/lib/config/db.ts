@@ -1,5 +1,5 @@
-import { ENV } from "@/utils/env";
-import logger from "@/utils/logger";
+import { ENV } from "@/shared/utils/env";
+import logger from "@/shared/utils/logger";
 import { Pool } from "pg";
 
 const db = new Pool({

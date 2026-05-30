@@ -1,5 +1,5 @@
 import { faker } from "@faker-js/faker";
-import db from "@/lib/config/db";
+import db from "@/shared/lib/config/db";
 import logger from "../logger";
 
 const USER_COUNT = 500;

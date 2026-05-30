@@ -1,4 +1,4 @@
-import { newEvent } from "@/controllers/event.controller";
+import { newEvent } from "@/api/controllers/event.controller";
 import { Router } from "express";
 
 const router = Router();

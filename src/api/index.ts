@@ -1,6 +1,6 @@
-import logger from "@/utils/logger";
-import { ENV } from "./utils/env";
-import { opentelemetrySDK } from "./lib/instrumentation";
+import logger from "@/shared/utils/logger";
+import { ENV } from "@/shared/utils/env";
+import { opentelemetrySDK } from "@/shared/lib/instrumentation";
 
 const PORT = Number(ENV.APP_PORT || 8080);
 const HOST = "0.0.0.0";
@@ -11,10 +11,10 @@ async function bootstrap() {
 
     const [{ app }, { seedDatabase }, { connectRedis }, { startWorkers }] =
       await Promise.all([
-        import("@/app"),
-        import("@/utils/db/seed-db"),
-        import("./lib/config/redis"),
-        import("./worker"),
+        import("@/api/app"),
+        import("@/shared/utils/db/seed-db"),
+        import("@/shared/lib/config/redis"),
+        import("@/worker"),
       ]);
 
     await seedDatabase();

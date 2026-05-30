@@ -1,5 +1,5 @@
-import { ENV } from "@/utils/env";
-import logger from "@/utils/logger";
+import { ENV } from "@/shared/utils/env";
+import logger from "@/shared/utils/logger";
 import { createClient } from "redis";
 
 const redisUrl = `redis://${ENV.REDIS_HOST}:${ENV.REDIS_PORT}`;

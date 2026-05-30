@@ -1,11 +1,11 @@
-import { redisClient } from "@/lib/config/redis";
-import { EventRequestData } from "@/types/api";
+import { redisClient } from "@/shared/lib/config/redis";
+import { EventRequestData } from "@/shared/types/api";
 import {
   EVENT_QUEUE_KEY,
   EVENT_QUEUE_MAX_SIZE,
   HTTP_CODE,
-} from "@/utils/constants";
-import logger from "@/utils/logger";
+} from "@/shared/utils/constants";
+import logger from "@/shared/utils/logger";
 import { NextFunction, Request, Response } from "express";
 import opentelemetry, {
   SpanStatusCode,

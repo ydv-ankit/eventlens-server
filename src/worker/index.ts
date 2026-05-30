@@ -1,12 +1,11 @@
-import db from "./lib/config/db";
+import db from "@/shared/lib/config/db";
 import {
   AppRedisClient,
   ensureRedisConnection,
   getRedisClient,
   redisClient,
-} from "./lib/config/redis";
-import { EventRequestData } from "./types/api";
-import { RedisEvent, RetryQueue } from "./types/types";
+} from "@/shared/lib/config/redis";
+import { RedisEvent, RetryQueue } from "@/shared/types/types";
 import {
   BATCH_INSERTION_LIMIT,
   EVENT_QUEUE_KEY,
@@ -14,16 +13,15 @@ import {
   REDIS_RETRY_DELAY_MS,
   RETRY_COUNT_LIMIT,
   RETRY_EVENT_QUEUE_LIMIT,
-  RETRY_QUEUE_FAILED_RETRY_DELAY,
   TOTAL_EVENTS_PROCESSED,
-} from "./utils/constants";
-import { SQL_QUERIES } from "./utils/db/queries";
-import logger from "./utils/logger";
+} from "@/shared/utils/constants";
+import { SQL_QUERIES } from "@/shared/utils/db/queries";
+import logger from "@/shared/utils/logger";
 import {
   batchInsertionsGauge,
   failedInsertionsCounter,
   totalEventsProcessedCounter,
-} from "./utils/monitoring/prom";
+} from "@/shared/utils/monitoring/prom";
 import opentelemetry, {
   Link,
   SpanStatusCode,
