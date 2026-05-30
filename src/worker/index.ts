@@ -5,6 +5,7 @@ import {
   getRedisClient,
   redisClient,
 } from "@/shared/lib/config/redis";
+import { opentelemetrySDK } from "@/shared/lib/instrumentation";
 import { RedisEvent, RetryQueue } from "@/shared/types/types";
 import {
   BATCH_INSERTION_LIMIT,
@@ -68,7 +69,7 @@ async function mainQueueWorker(
   workerRedisClient: AppRedisClient,
   workerName: string,
 ) {
-  logger.info(`Starting ${workerName}`);
+  logger.debug(`Starting ${workerName}`);
   while (true) {
     const batchInsertionValues = new Array();
     try {
@@ -78,11 +79,13 @@ async function mainQueueWorker(
         continue;
       }
 
+      logger.debug("waiting for redis data")
       const result = await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0);
       if (!result) {
         await sleep(REDIS_RETRY_DELAY_MS);
         continue;
       }
+      logger.debug("got data")
 
       const parsedResult = JSON.parse(result.element) as RedisEvent;
       // trace context
@@ -130,7 +133,7 @@ async function mainQueueWorker(
       }
 
       if (batchInsertionValues.length === 0) {
-        logger.info("no data to insert");
+        logger.debug("no data to insert");
         continue;
       }
 
@@ -162,6 +165,7 @@ async function mainQueueWorker(
             await db.query(query, batchInsertionValues);
             span.setAttribute("db.insert.batch.size", valuesLimit);
             span.setStatus({ code: SpanStatusCode.OK });
+            logger.debug("inserted into db")
           } catch (error) {
             span.recordException(error as Error);
             span.setStatus({
@@ -210,7 +214,7 @@ async function retryQueueWorker() {
     }
     const retryItem = retryQueue.shift();
     if (retryItem?.retry_count === 0) {
-      logger.info(
+      logger.debug(
         "retry count limit reached, skipping this event: " +
           JSON.stringify(retryItem.values),
       );
@@ -248,7 +252,8 @@ async function retryQueueWorker() {
   }
 }
 
-export const startWorkers = async () => {
+;(async () => {
+  opentelemetrySDK.start()
   // initialize workers
   const client1 = getRedisClient("Worker-1");
   // const client2 = getRedisClient("Worker-2");
@@ -262,4 +267,4 @@ export const startWorkers = async () => {
   // void mainQueueWorker(client2, "Worker-2");
   // void mainQueueWorker(client3, "Worker-3");
   void retryQueueWorker();
-};
+})();

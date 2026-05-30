@@ -90,7 +90,7 @@ export const seedDatabase = async () => {
             REFERENCES analytics.project(id);
         `);
 
-    logger.info("database seeding completed");
+    logger.debug("database seeding completed");
   } catch (error) {
     logger.error("failed seeding database, db operations may fail -> " + error);
   }

@@ -78,7 +78,7 @@ const insertInBatches = async <T>(
     const batch = rows.slice(i, i + BATCH_SIZE);
     const { text, values } = buildQuery(batch);
     await db.query(text, values);
-    logger.info(
+    logger.debug(
       `${label}: inserted ${Math.min(i + BATCH_SIZE, rows.length)}/${rows.length}`,
     );
   }
@@ -172,7 +172,7 @@ export const prefillDatabase = async () => {
       "events",
     );
 
-    logger.info("database prefill completed");
+    logger.debug("database prefill completed");
   } catch (error) {
     logger.error("failed prefilling database -> " + error);
   }

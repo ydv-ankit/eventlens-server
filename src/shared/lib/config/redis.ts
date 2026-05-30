@@ -18,10 +18,10 @@ const attachRedisLogging = (client: AppRedisClient, name: string) => {
   client.on("error", (err) =>
     logger.error(`${name} Redis error: ${err.message}`),
   );
-  client.on("connect", () => logger.info(`${name} Redis socket connected`));
-  client.on("ready", () => logger.info(`${name} Redis client ready`));
-  client.on("reconnecting", () => logger.info(`${name} Redis reconnecting`));
-  client.on("end", () => logger.info(`${name} Redis connection closed`));
+  client.on("connect", () => logger.debug(`${name} Redis socket connected`));
+  client.on("ready", () => logger.debug(`${name} Redis client ready`));
+  client.on("reconnecting", () => logger.debug(`${name} Redis reconnecting`));
+  client.on("end", () => logger.debug(`${name} Redis connection closed`));
 };
 
 const getRedisClient = (name = "Worker") => {

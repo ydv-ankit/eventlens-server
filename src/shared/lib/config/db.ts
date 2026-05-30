@@ -12,7 +12,7 @@ const db = new Pool({
   keepAlive: true,
 });
 
-db.on("connect", () => logger.info("Database connection success"));
+db.on("connect", () => logger.debug("Database connection success"));
 db.on("error", (err) =>
   logger.error("Database encountered an error: " + err.message),
 );

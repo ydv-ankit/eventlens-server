@@ -9,22 +9,20 @@ async function bootstrap() {
   try {
     opentelemetrySDK.start();
 
-    const [{ app }, { seedDatabase }, { connectRedis }, { startWorkers }] =
+    const [{ app }, { seedDatabase }, { connectRedis }] =
       await Promise.all([
         import("@/api/app"),
         import("@/shared/utils/db/seed-db"),
         import("@/shared/lib/config/redis"),
-        import("@/worker"),
       ]);
 
     await seedDatabase();
 
     app.listen(PORT, HOST, 4096, () => {
-      logger.info(`⚙️ Server listening on port: ${PORT}`);
+      logger.debug(`⚙️ Server listening on port: ${PORT}`);
     });
 
     await connectRedis();
-    await startWorkers();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("Server bootstrap failed: " + message);
