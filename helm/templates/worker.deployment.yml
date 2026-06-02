@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-deployment
+  labels:
+    app: worker
+spec:
+  replicas:  {{ .Values.worker.replicas }}
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+      - name: worker
+        image: "{{ .Values.worker.image.repository }}:{{ .Values.worker.image.tag }}"
+        env:
+        - name: DB_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_NAME
+        - name: DB_USER
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_USER
+        - name: DB_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_PASSWORD
+        - name: DB_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_PORT
+        - name: DB_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_HOST
+        - name: DB_MAX_CONNECTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_MAX_CONNECTIONS
+        - name: REDIS_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: REDIS_HOST
+        - name: REDIS_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: REDIS_PORT
+        - name: OTLP_TRACE_EXPORTER
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: OTLP_TRACE_EXPORTER
+        - name: OTEL_SPAN_LINK_COUNT_LIMIT
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: OTEL_SPAN_LINK_COUNT_LIMIT

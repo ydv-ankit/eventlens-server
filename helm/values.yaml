@@ -1,0 +1,35 @@
+api:
+  replicas: 1
+  image: 
+    repository: eventlens-api
+    tag: "1.0"
+    pullPolicy: Never
+  service:
+    port: 8080
+
+worker:
+  replicas: 1
+  image: 
+    repository: eventlens-worker
+    tag: "1.0"
+    pullPolicy: Never
+
+db:
+  replicas: 1
+  image:
+    repository: postgres
+    tag: alpine3.22
+  service:
+    port: 5432
+  storage:
+    size: 1Gi
+
+redis:
+  replicas: 1
+  image:
+    repository: redis
+    tag: 7
+  service:
+    port: 6379
+  storage:
+    size: 1Gi

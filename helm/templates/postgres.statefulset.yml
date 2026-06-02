@@ -1,0 +1,45 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres-service
+spec:
+  selector:
+    matchLabels:
+      app: postgres-service # has to match .spec.template.metadata.labels
+  serviceName: "postgres-service"
+  replicas: {{ .Values.db.replicas }} # by default is 1
+  minReadySeconds: 10 # by default is 0
+  template:
+    metadata:
+      labels:
+        app: postgres-service # has to match .spec.selector.matchLabels
+    spec:
+      terminationGracePeriodSeconds: 10
+      containers:
+      - name: postgres-service
+        image: "{{ .Values.db.image.repository }}:{{ .Values.db.image.tag }}"
+        ports:
+        - containerPort: {{ .Values.db.service.port }}
+          name: pgsl-port
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_PASSWORD
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: DB_NAME
+        volumeMounts:
+        - name: postgres-volume
+          mountPath: /var/lib/postgresql
+  volumeClaimTemplates:
+  - metadata:
+      name: postgres-volume
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: {{ .Values.redis.storage.size }}
