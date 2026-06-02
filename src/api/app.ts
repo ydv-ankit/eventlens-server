@@ -15,7 +15,7 @@ import opentelemetry, { SpanStatusCode, trace } from "@opentelemetry/api";
 
 const app = express();
 const tracer = opentelemetry.trace.getTracer("eventlens-http");
-const UNTRACED_ROUTES = new Set(["/metrics"]);
+const UNTRACED_ROUTES = new Set(["/metrics", "/healthz", "/readyz"]);
 
 // middlewares
 app.use(express.json());
@@ -100,6 +100,28 @@ app.use(
 // routes
 app.get("/", (_, res) => {
   res.success(HTTP_CODE.OK, "hello there");
+});
+
+app.get("/healthz", (_req, res) => {
+  res.status(HTTP_CODE.OK).json({
+    status: true,
+    message: "ok",
+  });
+});
+
+app.get("/readyz", (_req, res) => {
+  if (!redisClient.isReady) {
+    res.status(HTTP_CODE.SERVICE_UNAVAILABLE).json({
+      status: false,
+      message: "redis unavailable",
+    });
+    return;
+  }
+
+  res.status(HTTP_CODE.OK).json({
+    status: true,
+    message: "ready",
+  });
 });
 
 app.use("/project", projectRoutes);
