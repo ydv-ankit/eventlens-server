@@ -17,12 +17,12 @@ async function bootstrap() {
       ]);
 
     await seedDatabase();
+    await connectRedis();
 
     app.listen(PORT, HOST, 4096, () => {
       logger.debug(`⚙️ Server listening on port: ${PORT}`);
     });
 
-    await connectRedis();
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("Server bootstrap failed: " + message);
