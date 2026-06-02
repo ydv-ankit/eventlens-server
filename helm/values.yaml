@@ -33,3 +33,29 @@ redis:
     port: 6379
   storage:
     size: 1Gi
+
+grafana:
+  replicas: 1
+  image:
+    repository: grafana/grafana
+    tag: latest
+  service:
+    port: 3000
+
+prometheus:
+  replicas: 1
+  image:
+    repository: prom/prometheus
+    tag: latest
+  service:
+    port: 9090
+  scrapeInterval: 5s
+
+jaeger:
+  replicas: 1
+  image:
+    repository: jaegertracing/all-in-one
+    tag: latest
+  service:
+    otlpPort: 4318
+    uiPort: 16686
