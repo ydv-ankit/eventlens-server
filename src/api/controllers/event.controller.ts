@@ -1,9 +1,7 @@
-import { redisClient } from "@/shared/lib/config/redis";
 import { EventRequestData } from "@/shared/types/api";
 import {
-  EVENT_QUEUE_KEY,
-  EVENT_QUEUE_MAX_SIZE,
   HTTP_CODE,
+  KAFKA_TOPIC,
 } from "@/shared/utils/constants";
 import logger from "@/shared/utils/logger";
 import { NextFunction, Request, Response } from "express";
@@ -12,6 +10,9 @@ import opentelemetry, {
   context,
   propagation,
 } from "@opentelemetry/api";
+import { isKafkaProducerConnected, kafkaProducer } from "@/shared/lib/config/kafka";
+import { QueueEventEnvelope } from "@/shared/types/types";
+import { ENV } from "@/shared/utils/env";
 
 const tracer = opentelemetry.trace.getTracer("eventlens-event-controller");
 
@@ -21,18 +22,18 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
       const data = req.body as EventRequestData;
       const apiKey = req.headers.authorization?.split(" ")[1];
       activeSpan.setAttributes({
-        "event.queue.name": EVENT_QUEUE_KEY,
+        "messaging.system": "kafka",
+        "messaging.destination.name": ENV.KAFKA_TOPIC || KAFKA_TOPIC,
         "event.name": data.event_name,
         "event.user_id_present": Boolean(data.user_id),
       });
 
       if (!apiKey) throw new Error("API_KEY not found");
       activeSpan.setAttribute("event.api_key_present", true);
-      if (!redisClient.isReady) {
-        activeSpan.setAttribute("event.redis_ready", false);
+      if (!isKafkaProducerConnected()) {
         activeSpan.setStatus({
           code: SpanStatusCode.ERROR,
-          message: "Redis client unavailable",
+          message: "Kafka producer unavailable",
         });
         res.error(
           HTTP_CODE.SERVICE_UNAVAILABLE,
@@ -40,58 +41,49 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
         );
         return;
       }
-      activeSpan.setAttribute("event.redis_ready", true);
 
-      const queueDepth = await redisClient.lLen(EVENT_QUEUE_KEY);
-      activeSpan.setAttribute("event.queue.depth_before_enqueue", queueDepth);
-      if (queueDepth >= EVENT_QUEUE_MAX_SIZE) {
-        logger.error(
-          "Queue limit reached to max limit of " + EVENT_QUEUE_MAX_SIZE,
-        );
-        activeSpan.setAttribute("event.enqueue.rejected", true);
-        activeSpan.setStatus({
-          code: SpanStatusCode.ERROR,
-          message: "Queue limit reached",
-        });
-        res.error(HTTP_CODE.TOO_MANY_REQUESTS, "retry after some time");
-        return;
-      }
+      const traceContext = {};
+      propagation.inject(context.active(), traceContext);
+      const queueEventEnvelope: QueueEventEnvelope = {
+        event: {
+          event_name: data.event_name,
+          metadata: data.metadata,
+          apiKey,
+          user_id: data.user_id,
+          timestamp: data.timestamp,
+        },
+        trace: traceContext,
+        queueAt: Date.now(),
+      };
 
-      await tracer.startActiveSpan("redis.enqueue", async (redisSpan) => {
+      await tracer.startActiveSpan("kafka.produce", async (kafkaSpan) => {
         try {
-          redisSpan.setAttributes({
-            "db.system": "redis",
-            "db.operation": "LPUSH",
-            "db.redis.key": EVENT_QUEUE_KEY,
+          kafkaSpan.setAttributes({
+            "messaging.system": "kafka",
+            "messaging.destination.name": ENV.KAFKA_TOPIC || KAFKA_TOPIC,
+            "messaging.operation.name": "send",
           });
 
-          const traceContext = {};
-          propagation.inject(context.active(), traceContext);
-          await redisClient.lPush(
-            EVENT_QUEUE_KEY,
-            JSON.stringify({
-              event: {
-                event_name: data.event_name,
-                metadata: data.metadata,
-                apiKey,
-                user_id: data.user_id,
-                timestamp: data.timestamp,
+          await kafkaProducer.send({
+            topic: ENV.KAFKA_TOPIC || KAFKA_TOPIC,
+            messages: [
+              {
+                key: data.user_id,
+                value: JSON.stringify(queueEventEnvelope),
               },
-              trace: traceContext,
-              queueAt: Date.now(),
-            }),
-          );
-
-          redisSpan.setStatus({ code: SpanStatusCode.OK });
-        } catch (error) {
-          redisSpan.recordException(error as Error);
-          redisSpan.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: "Failed to enqueue event in Redis",
+            ],
           });
-          throw error;
+
+          kafkaSpan.setStatus({ code: SpanStatusCode.OK });
+        } catch (error) {
+          kafkaSpan.recordException(error as Error);
+          kafkaSpan.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: "Failed to publish event to Kafka",
+          });
+          logger.error("failed to publish event to kafka: " + String(error));
         } finally {
-          redisSpan.end();
+          kafkaSpan.end();
         }
       });
 
@@ -100,10 +92,10 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
       res.success(HTTP_CODE.OK, "event accepted");
     } catch (error) {
       logger.error("failed to enqueue event: " + String(error));
-      const statusCode = redisClient.isReady
+      const statusCode = isKafkaProducerConnected()
         ? HTTP_CODE.BAD_REQUEST
         : HTTP_CODE.SERVICE_UNAVAILABLE;
-      const message = redisClient.isReady
+      const message = isKafkaProducerConnected()
         ? "error occured while enqueueing event"
         : "event ingestion queue unavailable";
       activeSpan.recordException(error as Error);

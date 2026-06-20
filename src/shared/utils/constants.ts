@@ -32,6 +32,11 @@ export const RETRY_EVENT_QUEUE_KEY = "retry_event_queue";
 export const RETRY_EVENT_QUEUE_LIMIT = 5_000_000;
 export const RETRY_QUEUE_FAILED_RETRY_DELAY = 1_000;
 export const REDIS_RETRY_DELAY_MS = 2_000;
+export const KAFKA_TOPIC = "eventlens-events";
+export const KAFKA_RETRY_TOPIC = "eventlens-events-retry";
+export const KAFKA_CONSUMER_GROUP = "eventlens-worker-group";
+export const KAFKA_RETRY_CONSUMER_GROUP = "eventlens-retry-worker-group";
+export const KAFKA_TOPIC_PARTITIONS = 4;
 
 // metrics
 export const TOTAL_REQUESTS = "TOTAL_REQUESTS";

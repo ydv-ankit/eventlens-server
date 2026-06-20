@@ -5,13 +5,13 @@ import metricRoutes from "@/api/routes/metric.route";
 import logger from "@/shared/utils/logger";
 import morgan from "morgan";
 import "@/shared/utils/api-response";
-import { HTTP_CODE, TOTAL_REQUESTS } from "@/shared/utils/constants";
-import { redisClient } from "@/shared/lib/config/redis";
+import { HTTP_CODE } from "@/shared/utils/constants";
 import {
   failedRequestsCounter,
   totalRequestsCounter,
 } from "@/shared/utils/monitoring/prom";
 import opentelemetry, { SpanStatusCode, trace } from "@opentelemetry/api";
+import { isKafkaProducerConnected } from "@/shared/lib/config/kafka";
 
 const app = express();
 const tracer = opentelemetry.trace.getTracer("eventlens-http");
@@ -87,11 +87,7 @@ app.use(
       trace.setSpan(opentelemetry.context.active(), requestSpan),
       async () => {
         totalRequestsCounter.inc();
-        try {
-          await redisClient.incr(TOTAL_REQUESTS);
-        } finally {
-          next();
-        }
+        next();
       },
     );
   },
@@ -110,10 +106,10 @@ app.get("/healthz", (_req, res) => {
 });
 
 app.get("/readyz", (_req, res) => {
-  if (!redisClient.isReady) {
+  if (!isKafkaProducerConnected()) {
     res.status(HTTP_CODE.SERVICE_UNAVAILABLE).json({
       status: false,
-      message: "redis unavailable",
+      message: "kafka producer unavailable",
     });
     return;
   }

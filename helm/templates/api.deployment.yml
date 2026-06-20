@@ -76,6 +76,26 @@ spec:
             configMapKeyRef:
               name: eventlens-configmap
               key: REDIS_PORT
+        - name: KAFKA_BROKERS
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: KAFKA_BROKERS
+        - name: KAFKA_CLIENT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: KAFKA_CLIENT_ID
+        - name: KAFKA_TOPIC
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: KAFKA_TOPIC
+        - name: KAFKA_CONSUMER_GROUP
+          valueFrom:
+            configMapKeyRef:
+              name: eventlens-configmap
+              key: KAFKA_CONSUMER_GROUP
         - name: OTLP_TRACE_EXPORTER
           valueFrom:
             configMapKeyRef:
