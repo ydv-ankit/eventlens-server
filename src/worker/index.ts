@@ -1,28 +1,28 @@
 import db from "@/shared/lib/config/db";
-import {
-  AppRedisClient,
-  ensureRedisConnection,
-  getRedisClient,
-  redisClient,
-} from "@/shared/lib/config/redis";
 import { opentelemetrySDK } from "@/shared/lib/instrumentation";
-import { RedisEvent, RetryQueue } from "@/shared/types/types";
+import { KafkaEvent, RetryKafkaEvent } from "@/shared/types/types";
 import {
-  BATCH_INSERTION_LIMIT,
-  EVENT_QUEUE_KEY,
-  FAILED_INSERTION_COUNT,
-  REDIS_RETRY_DELAY_MS,
+  KAFKA_CONSUMER_GROUP,
+  KAFKA_RETRY_CONSUMER_GROUP,
+  KAFKA_RETRY_TOPIC,
+  KAFKA_TOPIC,
   RETRY_COUNT_LIMIT,
-  RETRY_EVENT_QUEUE_LIMIT,
-  TOTAL_EVENTS_PROCESSED,
 } from "@/shared/utils/constants";
 import { SQL_QUERIES } from "@/shared/utils/db/queries";
+import { ENV } from "@/shared/utils/env";
 import logger from "@/shared/utils/logger";
 import {
   batchInsertionsGauge,
   failedInsertionsCounter,
   totalEventsProcessedCounter,
 } from "@/shared/utils/monitoring/prom";
+import {
+  connectKafkaProducer,
+  ensureKafkaTopics,
+  getKafkaConsumer,
+  kafkaProducer,
+  subscribeKafkaConsumer,
+} from "@/shared/lib/config/kafka";
 import opentelemetry, {
   Link,
   SpanStatusCode,
@@ -32,239 +32,258 @@ import opentelemetry, {
 
 const tracer = opentelemetry.trace.getTracer("eventlens-worker");
 
-const retryQueue = new Array<RetryQueue>();
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
 setInterval(() => {
   batchInsertionsGauge.set(0);
   failedInsertionsCounter.set(0);
 }, 1000);
 
 const getProjectIdByApiKey = async (apiKey: string) => {
-  if (redisClient.isReady) {
-    const projectId = await redisClient.get(apiKey);
-    if (projectId) {
-      return projectId;
-    }
-  }
-
   const q = await db.query(SQL_QUERIES.GET_PROJECT_ID_BY_API_KEY, [apiKey]);
   if (q.rowCount === 1) {
-    const projectId = q.rows[0].id;
-    if (redisClient.isReady) {
-      await redisClient.set(apiKey, projectId, {
-        expiration: {
-          type: "EX",
-          value: 5 * 60,
-        },
-      });
-    }
-    return projectId;
+    return q.rows[0].id;
   }
   return null;
 };
 
-// main queue worker
-async function mainQueueWorker(
-  workerRedisClient: AppRedisClient,
-  workerName: string,
-) {
-  logger.debug(`Starting ${workerName}`);
-  while (true) {
-    const batchInsertionValues = new Array();
-    try {
-      await ensureRedisConnection(workerRedisClient, workerName);
-      if (!workerRedisClient.isReady) {
-        await sleep(REDIS_RETRY_DELAY_MS);
-        continue;
-      }
+const insertRawEvent = async (values: unknown[]) => {
+  await db.query(
+    `${SQL_QUERIES.BATCH_EVENT_INSERT}($1, $2, $3, $4, $5);`,
+    values,
+  );
+};
 
-      logger.debug("waiting for redis data")
-      const result = await workerRedisClient.BLPOP(EVENT_QUEUE_KEY, 0);
-      if (!result) {
-        await sleep(REDIS_RETRY_DELAY_MS);
-        continue;
-      }
-      logger.debug("got data")
-
-      const parsedResult = JSON.parse(result.element) as RedisEvent;
-      // trace context
-      const links: Link[] = [];
-      const inputContext = parsedResult.trace;
-      const spanContext = opentelemetry.trace.getSpanContext(
-        propagation.extract(context.active(), inputContext),
-      );
-      if (spanContext) {
-        links.push({ context: spanContext });
-      }
-
-      const projectId = await getProjectIdByApiKey(parsedResult.event.apiKey);
-      const values = [
-        parsedResult.event.event_name,
-        parsedResult.event.metadata,
-        projectId,
-        parsedResult.event.user_id,
-        parsedResult.event.timestamp,
-      ];
-      batchInsertionValues.push(...values);
-      for (let i = 0; i < BATCH_INSERTION_LIMIT - 1; i++) {
-        const result = await workerRedisClient.LPOP(EVENT_QUEUE_KEY);
-        if (!result) break;
-        const parsedResult = JSON.parse(result) as RedisEvent;
-        // trace context
-        const inputContext = parsedResult.trace;
-        const spanContext = opentelemetry.trace.getSpanContext(
-          propagation.extract(context.active(), inputContext),
-        );
-        if (spanContext) {
-          links.push({ context: spanContext });
-        }
-        // using cache to avoid db lookup
-        const projectId = await getProjectIdByApiKey(parsedResult.event.apiKey);
-        if (!projectId) continue;
-        const values = [
-          parsedResult.event.event_name,
-          parsedResult.event.metadata,
-          projectId,
-          parsedResult.event.user_id,
-          parsedResult.event.timestamp,
-        ];
-        batchInsertionValues.push(...values);
-      }
-
-      if (batchInsertionValues.length === 0) {
-        logger.debug("no data to insert");
-        continue;
-      }
-
-      let query = SQL_QUERIES.BATCH_EVENT_INSERT;
-      const valuesLimit = Math.floor(batchInsertionValues.length / 5);
-      for (let i = 0; i < valuesLimit; i++) {
-        query += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
-        if (i === valuesLimit - 1) {
-          query += `;`;
-        } else {
-          query += `,`;
-        }
-      }
-      const workerSpan = tracer.startSpan("worker.batch", { links });
-      workerSpan.setAttribute(
-        "queue.wait.ms",
-        Date.now() - Number(parsedResult.queueAt),
-      );
-      const workerContext = opentelemetry.trace.setSpan(
-        context.active(),
-        workerSpan,
-      );
-      await tracer.startActiveSpan(
-        "db.insert.batch",
-        {},
-        workerContext,
-        async (span) => {
-          try {
-            await db.query(query, batchInsertionValues);
-            span.setAttribute("db.insert.batch.size", valuesLimit);
-            span.setStatus({ code: SpanStatusCode.OK });
-            logger.debug("inserted into db")
-          } catch (error) {
-            span.recordException(error as Error);
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: "failed to insert into db",
-            });
-          } finally {
-            span.end();
-            workerSpan.end();
-          }
+const publishRetryEvent = async (
+  retryEvent: RetryKafkaEvent,
+  topic: string,
+  partition: number,
+  offset: string,
+) => {
+  try {
+    await kafkaProducer.send({
+      topic: ENV.KAFKA_RETRY_TOPIC || KAFKA_RETRY_TOPIC,
+      messages: [
+        {
+          key: retryEvent.event.apiKey,
+          value: JSON.stringify(retryEvent),
         },
-      );
-      totalEventsProcessedCounter.inc(valuesLimit);
-      batchInsertionsGauge.set(valuesLimit);
-      redisClient.isReady &&
-        (await redisClient.incrBy(TOTAL_EVENTS_PROCESSED, valuesLimit));
-    } catch (error) {
-      logger.error(
-        `${workerName} failed to process queue items: ${String(error)}`,
-      );
-      // push this data into retry queue for processing again
-      const valuesLimit = Math.floor(batchInsertionValues.length / 5);
-      for (let idx = 0; idx < valuesLimit; idx++) {
-        setTimeout(() => {
-          if (retryQueue.length < RETRY_EVENT_QUEUE_LIMIT) {
-            retryQueue.push({
-              values: batchInsertionValues.slice(idx * 5, idx * 5 + 5),
-              retry_count: RETRY_COUNT_LIMIT,
-            } as RetryQueue);
+      ],
+    });
+    failedInsertionsCounter.inc();
+    logger.error(
+      `Kafka message moved to retry topic sourceTopic=${topic} partition=${partition} offset=${offset} retryCount=${retryEvent.retryCount}`,
+    );
+  } catch (error) {
+    logger.error(
+      `Failed to publish retry message sourceTopic=${topic} partition=${partition} offset=${offset}: ${String(error)}`,
+    );
+  }
+};
+
+const processKafkaMessage = async (
+  parsedMessage: KafkaEvent | RetryKafkaEvent,
+  topic: string,
+  partition: number,
+  offset: string,
+  retryCount = 0,
+) => {
+  const extractedContext = propagation.extract(
+    context.active(),
+    parsedMessage.trace || {},
+  );
+  const links: Link[] = [];
+  const spanContext = opentelemetry.trace.getSpanContext(extractedContext);
+  if (spanContext) {
+    links.push({ context: spanContext });
+  }
+
+  const projectId = await getProjectIdByApiKey(parsedMessage.event.apiKey);
+  if (!projectId) {
+    logger.error(
+      `Kafka message skipped topic=${topic} partition=${partition} offset=${offset}: project not found for api key`,
+    );
+    return;
+  }
+
+  const values = [
+    parsedMessage.event.event_name,
+    parsedMessage.event.metadata,
+    projectId,
+    parsedMessage.event.user_id,
+    parsedMessage.event.timestamp,
+  ];
+
+  const workerSpan = tracer.startSpan("kafka.message", {
+    links,
+    attributes: {
+      "messaging.system": "kafka",
+      "messaging.destination.name": topic,
+      "messaging.kafka.partition": partition,
+      "messaging.kafka.offset": offset,
+      "queue.wait.ms": Date.now() - Number(parsedMessage.queueAt),
+      "kafka.retry_count": retryCount,
+    },
+  });
+  const workerContext = opentelemetry.trace.setSpan(
+    context.active(),
+    workerSpan,
+  );
+
+  await tracer.startActiveSpan(
+    "db.insert.message",
+    {},
+    workerContext,
+    async (span) => {
+      try {
+        await insertRawEvent(values);
+        span.setAttribute("db.insert.batch.size", 1);
+        span.setStatus({ code: SpanStatusCode.OK });
+        workerSpan.setStatus({ code: SpanStatusCode.OK });
+        totalEventsProcessedCounter.inc(1);
+        batchInsertionsGauge.set(1);
+        logger.debug(
+          `Kafka message inserted event=${parsedMessage.event.event_name} partition=${partition} offset=${offset} retryCount=${retryCount}`,
+        );
+      } catch (error) {
+        span.recordException(error as Error);
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: "failed to insert kafka message into db",
+        });
+        workerSpan.recordException(error as Error);
+        workerSpan.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: "failed to process kafka message",
+        });
+
+        if (retryCount > 0) {
+          const nextRetryCount =
+            (error as Error).message.includes("getaddrinfo ENOTFOUND db")
+              ? retryCount
+              : retryCount - 1;
+
+          if (nextRetryCount > 0) {
+            await publishRetryEvent(
+              {
+                ...parsedMessage,
+                retryCount: nextRetryCount,
+              },
+              topic,
+              partition,
+              offset,
+            );
           } else {
-            logger.error("Retry queue overflow, dropping events");
+            logger.error(
+              `Kafka retry exhausted topic=${topic} partition=${partition} offset=${offset}: ${String(error)}`,
+            );
           }
-        }, 100);
+        } else {
+          await publishRetryEvent(
+            {
+              ...parsedMessage,
+              retryCount: RETRY_COUNT_LIMIT,
+            },
+            topic,
+            partition,
+            offset,
+          );
+        }
+
+        logger.error(
+          `Kafka message failed topic=${topic} partition=${partition} offset=${offset}: ${String(error)}`,
+        );
+      } finally {
+        span.end();
+        workerSpan.end();
       }
-      await sleep(REDIS_RETRY_DELAY_MS);
-    }
+    },
+  );
+};
+
+async function kafkaObservationConsumer() {
+  const consumer = getKafkaConsumer(
+    ENV.KAFKA_CONSUMER_GROUP || KAFKA_CONSUMER_GROUP,
+  );
+
+  try {
+    await consumer.connect();
+    await subscribeKafkaConsumer(consumer, ENV.KAFKA_TOPIC || KAFKA_TOPIC);
+    logger.debug("Kafka consumer connected");
+
+    await consumer.run({
+      eachMessage: async ({ topic, partition, message }) => {
+        if (!message.value) {
+          return;
+        }
+
+        try {
+          const parsedMessage = JSON.parse(
+            message.value.toString(),
+          ) as KafkaEvent;
+          await processKafkaMessage(
+            parsedMessage,
+            topic,
+            partition,
+            message.offset,
+            0,
+          );
+        } catch (error) {
+          logger.error(
+            `Kafka message skipped topic=${topic} partition=${partition} offset=${message.offset}: ${String(error)}`,
+          );
+        }
+      },
+    });
+  } catch (error) {
+    logger.error("Kafka consumer failed: " + String(error));
   }
 }
 
-// retry queue worker
-async function retryQueueWorker() {
-  while (true) {
-    if (retryQueue.length === 0) {
-      await new Promise((r) => setTimeout(r, 100));
-      continue;
-    }
-    const retryItem = retryQueue.shift();
-    if (retryItem?.retry_count === 0) {
-      logger.debug(
-        "retry count limit reached, skipping this event: " +
-          JSON.stringify(retryItem.values),
-      );
-      continue;
-    }
-    try {
-      let query = SQL_QUERIES.BATCH_EVENT_INSERT;
-      const valuesLimit = Math.floor(Number(retryItem?.values?.length) / 5);
-      for (let i = 0; i < valuesLimit; i++) {
-        query += `($${5 * i + 1}, $${5 * i + 2}, $${5 * i + 3}, $${5 * i + 4}, $${5 * i + 5})`;
-        if (i === valuesLimit - 1) {
-          query += `;`;
-        } else {
-          query += `,`;
-        }
-      }
+async function kafkaRetryConsumer() {
+  const consumer = getKafkaConsumer(
+    ENV.KAFKA_RETRY_CONSUMER_GROUP || KAFKA_RETRY_CONSUMER_GROUP,
+  );
 
-      await db.query(SQL_QUERIES.BATCH_EVENT_INSERT, retryItem?.values);
-    } catch (error: any) {
-      logger.error("{retry queue error} " + error);
-      let retry_count = RETRY_COUNT_LIMIT;
-      // db down
-      if ((error as Error).message.includes("getaddrinfo ENOTFOUND db")) {
-        retry_count = retryItem!.retry_count;
-      } else {
-        retry_count = retryItem!.retry_count - 1;
-      }
-      retryQueue.push({
-        values: retryItem?.values,
-        retry_count,
-      } as RetryQueue);
-      await redisClient.incr(FAILED_INSERTION_COUNT);
-      failedInsertionsCounter.set(retryQueue.length);
-    }
+  try {
+    await consumer.connect();
+    await subscribeKafkaConsumer(
+      consumer,
+      ENV.KAFKA_RETRY_TOPIC || KAFKA_RETRY_TOPIC,
+    );
+    logger.debug("Kafka retry consumer connected");
+
+    await consumer.run({
+      eachMessage: async ({ topic, partition, message }) => {
+        if (!message.value) {
+          return;
+        }
+
+        try {
+          const parsedMessage = JSON.parse(
+            message.value.toString(),
+          ) as RetryKafkaEvent;
+          await processKafkaMessage(
+            parsedMessage,
+            topic,
+            partition,
+            message.offset,
+            parsedMessage.retryCount,
+          );
+        } catch (error) {
+          logger.error(
+            `Kafka retry message skipped topic=${topic} partition=${partition} offset=${message.offset}: ${String(error)}`,
+          );
+        }
+      },
+    });
+  } catch (error) {
+    logger.error("Kafka retry consumer failed: " + String(error));
   }
 }
 
 ;(async () => {
-  opentelemetrySDK.start()
-  // initialize workers
-  const client1 = getRedisClient("Worker-1");
-  // const client2 = getRedisClient("Worker-2");
-  // const client3 = getRedisClient("Worker-3");
-
-  void ensureRedisConnection(client1, "Worker-1");
-  // void ensureRedisConnection(client2, "Worker-2");
-  // void ensureRedisConnection(client3, "Worker-3");
-
-  void mainQueueWorker(client1, "Worker-1");
-  // void mainQueueWorker(client2, "Worker-2");
-  // void mainQueueWorker(client3, "Worker-3");
-  void retryQueueWorker();
+  opentelemetrySDK.start();
+  await ensureKafkaTopics();
+  await connectKafkaProducer();
+  void kafkaObservationConsumer();
+  void kafkaRetryConsumer();
 })();
