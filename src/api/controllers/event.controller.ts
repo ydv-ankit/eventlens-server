@@ -27,8 +27,8 @@ const tracer = opentelemetry.trace.getTracer("eventlens-event-controller");
 const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
   return tracer.startActiveSpan("event.enqueue", async (activeSpan) => {
     try {
-      const data = req.body as EventRequestData;
-      const apiKey = req.headers.authorization?.split(" ")[1];
+      const { api_key: bodyApiKey, ...data } = req.body as EventRequestData & { api_key?: string };
+      const apiKey = bodyApiKey ?? req.headers.authorization?.split(" ")[1];
       activeSpan.setAttributes({
         "messaging.system": "kafka",
         "messaging.destination.name": ENV.KAFKA_TOPIC || KAFKA_TOPIC,

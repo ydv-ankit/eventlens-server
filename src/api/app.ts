@@ -25,7 +25,15 @@ const UNTRACED_ROUTES = new Set(["/metrics", "/healthz", "/readyz"]);
 
 // middlewares
 app.use(cors({
-  origin: ENV.CORS_ORIGINS,
+  origin: (origin, callback) => {
+    // Allow: no origin (curl / server-to-server), file:// pages (origin === "null"),
+    // and any explicitly configured origin.
+    if (!origin || origin === "null" || ENV.CORS_ORIGINS.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`CORS: ${origin} not allowed`));
+    }
+  },
   credentials: true,
   allowedHeaders: ["Content-Type", "Authorization"],
 }));

@@ -57,7 +57,7 @@ const getProjectIdByApiKey = async (apiKey: string) => {
 
 const insertRawEvent = async (values: unknown[]) => {
   await db.query(
-    `${SQL_QUERIES.BATCH_EVENT_INSERT}($1, $2, $3, $4, $5);`,
+    `${SQL_QUERIES.BATCH_EVENT_INSERT}($1, $2, $3, $4, $5, $6);`,
     values,
   );
 };
@@ -120,6 +120,7 @@ const processKafkaMessage = async (
     projectId,
     parsedMessage.event.user_id,
     parsedMessage.event.timestamp,
+    parsedMessage.event.session_id ?? null,
   ];
 
   const workerSpan = tracer.startSpan("kafka.message", {
@@ -269,13 +270,14 @@ async function kafkaObservationConsumer() {
               project_id: apiKeyCache.get(p.data.event.apiKey)!,
               user_id:    p.data.event.user_id,
               timestamp:  p.data.event.timestamp,
+              session_id: p.data.event.session_id ?? null,
               raw:        p,
             }));
 
             // Single multi-row INSERT for the whole batch
-            const values = rows.flatMap((r) => [r.event_name, r.metadata, r.project_id, r.user_id, r.timestamp]);
+            const values = rows.flatMap((r) => [r.event_name, r.metadata, r.project_id, r.user_id, r.timestamp, r.session_id]);
             const placeholders = rows
-              .map((_, i) => `($${i * 5 + 1}, $${i * 5 + 2}, $${i * 5 + 3}, $${i * 5 + 4}, $${i * 5 + 5})`)
+              .map((_, i) => `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`)
               .join(", ");
 
             try {

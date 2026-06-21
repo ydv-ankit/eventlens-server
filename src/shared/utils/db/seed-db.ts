@@ -79,6 +79,11 @@ export const seedDatabase = async () => {
 
     await db.query(`
       ALTER TABLE analytics.raw_event
+      ADD COLUMN IF NOT EXISTS session_id TEXT
+    `);
+
+    await db.query(`
+      ALTER TABLE analytics.raw_event
       DROP CONSTRAINT IF EXISTS fk_analytics_raw_event;
 
       ALTER TABLE analytics.raw_event

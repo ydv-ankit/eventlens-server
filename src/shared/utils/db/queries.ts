@@ -60,7 +60,7 @@ export const SQL_QUERIES = {
   `,
 
   // Events
-  BATCH_EVENT_INSERT: `INSERT INTO analytics.raw_event (event_name, metadata, project_id, user_id, timestamp) VALUES `,
+  BATCH_EVENT_INSERT: `INSERT INTO analytics.raw_event (event_name, metadata, project_id, user_id, timestamp, session_id) VALUES `,
   GET_EVENTS: `
     SELECT id, event_name, metadata, project_id, user_id, timestamp, created_at
     FROM analytics.raw_event
