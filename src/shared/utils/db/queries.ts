@@ -69,8 +69,8 @@ export const SQL_QUERIES = {
       AND ($3::text IS NULL OR user_id ILIKE '%' || $3 || '%')
       AND ($4::timestamptz IS NULL OR COALESCE(timestamp, created_at) >= $4)
       AND ($5::timestamptz IS NULL OR COALESCE(timestamp, created_at) <= $5)
-      AND ($6::int IS NULL OR id > $6)
-    ORDER BY id ASC
+      AND ($6::int IS NULL OR id < $6)
+    ORDER BY id DESC
     LIMIT $7
   `,
 
