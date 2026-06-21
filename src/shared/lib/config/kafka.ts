@@ -17,67 +17,52 @@ const kafkaClient = new Kafka({
 });
 
 const kafkaProducer = kafkaClient.producer();
-const kafkaAdmin = kafkaClient.admin();
 let kafkaProducerConnected = false;
 
 const KAFKA_RECONNECT_INTERVAL_MS = 5000;
 const configuredTopicPartitions =
   ENV.KAFKA_TOPIC_PARTITIONS || KAFKA_TOPIC_PARTITIONS;
 
-const ensureTopicPartitions = async (topic: string) => {
-  try {
-    const metadata = await kafkaAdmin.fetchTopicMetadata({ topics: [topic] });
-    const topicMetadata = metadata.topics.find((item) => item.name === topic);
-    if (!topicMetadata) {
-      return;
-    }
-
-    const currentPartitions = topicMetadata.partitions.length;
-    if (currentPartitions < configuredTopicPartitions) {
-      await kafkaAdmin.createPartitions({
-        topicPartitions: [
-          {
-            topic,
-            count: configuredTopicPartitions,
-          },
-        ],
-      });
-      logger.debug(
-        `Kafka topic ${topic} partitions increased from ${currentPartitions} to ${configuredTopicPartitions}`,
-      );
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error(`Kafka partition sync failed for ${topic}: ${message}`);
-  }
-};
-
 const ensureKafkaTopics = async () => {
+  const admin = kafkaClient.admin();
   try {
-    await kafkaAdmin.connect();
-    await kafkaAdmin.createTopics({
-      waitForLeaders: true,
-      topics: [
-        {
-          topic: ENV.KAFKA_TOPIC || KAFKA_TOPIC,
+    await admin.connect();
+    const existing = new Set(await admin.listTopics());
+    const desired = [
+      ENV.KAFKA_TOPIC || KAFKA_TOPIC,
+      ENV.KAFKA_RETRY_TOPIC || KAFKA_RETRY_TOPIC,
+    ];
+    const toCreate = desired.filter((t) => !existing.has(t));
+    if (toCreate.length > 0) {
+      await admin.createTopics({
+        waitForLeaders: true,
+        topics: toCreate.map((topic) => ({
+          topic,
           numPartitions: configuredTopicPartitions,
           replicationFactor: 1,
-        },
-        {
-          topic: ENV.KAFKA_RETRY_TOPIC || KAFKA_RETRY_TOPIC,
-          numPartitions: configuredTopicPartitions,
-          replicationFactor: 1,
-        },
-      ],
-    });
+        })),
+      });
+    }
 
-    await ensureTopicPartitions(ENV.KAFKA_TOPIC || KAFKA_TOPIC);
-    await ensureTopicPartitions(ENV.KAFKA_RETRY_TOPIC || KAFKA_RETRY_TOPIC);
+    for (const topic of desired) {
+      try {
+        const metadata = await admin.fetchTopicMetadata({ topics: [topic] });
+        const topicMeta = metadata.topics.find((t) => t.name === topic);
+        if (topicMeta && topicMeta.partitions.length < configuredTopicPartitions) {
+          await admin.createPartitions({
+            topicPartitions: [{ topic, count: configuredTopicPartitions }],
+          });
+          logger.debug(`Kafka topic ${topic} partitions increased to ${configuredTopicPartitions}`);
+        }
+      } catch (err) {
+        logger.error(`Kafka partition sync failed for ${topic}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     logger.error("Kafka topic initialization failed: " + message);
   } finally {
-    await kafkaAdmin.disconnect();
+    await admin.disconnect();
   }
 };
 

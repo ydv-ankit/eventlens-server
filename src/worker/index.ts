@@ -1,5 +1,6 @@
 import db from "@/shared/lib/config/db";
 import { opentelemetrySDK } from "@/shared/lib/instrumentation";
+import { getRedisClient } from "@/shared/lib/config/redis";
 import { KafkaEvent, RetryKafkaEvent } from "@/shared/types/types";
 import {
   KAFKA_CONSUMER_GROUP,
@@ -16,6 +17,7 @@ import {
   failedInsertionsCounter,
   totalEventsProcessedCounter,
 } from "@/shared/utils/monitoring/prom";
+import { REDIS_CHANNEL_EVENTS, REDIS_KEYS } from "@/shared/utils/constants";
 import {
   connectKafkaProducer,
   ensureKafkaTopics,
@@ -23,6 +25,7 @@ import {
   kafkaProducer,
   subscribeKafkaConsumer,
 } from "@/shared/lib/config/kafka";
+import { hashApiKey } from "@/shared/utils/crypto";
 import opentelemetry, {
   Link,
   SpanStatusCode,
@@ -32,22 +35,29 @@ import opentelemetry, {
 
 const tracer = opentelemetry.trace.getTracer("eventlens-worker");
 
-setInterval(() => {
-  batchInsertionsGauge.set(0);
-  failedInsertionsCounter.set(0);
-}, 1000);
+// ── Redis publisher — atomic INCR counters, live event publish ────────────────
+const redisPublisher = getRedisClient("WorkerPublisher");
+
+const rIncr = (key: string) =>
+  redisPublisher.isReady ? redisPublisher.incr(key).catch(() => {}) : Promise.resolve();
+
+const rIncrBy = (key: string, n: number) =>
+  redisPublisher.isReady ? redisPublisher.incrBy(key, n).catch(() => {}) : Promise.resolve();
+
+const rDecrBy = (key: string, n: number) =>
+  redisPublisher.isReady ? redisPublisher.decrBy(key, n).catch(() => {}) : Promise.resolve();
 
 const getProjectIdByApiKey = async (apiKey: string) => {
-  const q = await db.query(SQL_QUERIES.GET_PROJECT_ID_BY_API_KEY, [apiKey]);
+  const q = await db.query(SQL_QUERIES.GET_PROJECT_ID_BY_API_KEY, [hashApiKey(apiKey)]);
   if (q.rowCount === 1) {
-    return q.rows[0].id;
+    return q.rows[0].project_id;
   }
   return null;
 };
 
 const insertRawEvent = async (values: unknown[]) => {
   await db.query(
-    `${SQL_QUERIES.BATCH_EVENT_INSERT}($1, $2, $3, $4, $5);`,
+    `${SQL_QUERIES.BATCH_EVENT_INSERT}($1, $2, $3, $4, $5, $6);`,
     values,
   );
 };
@@ -110,6 +120,7 @@ const processKafkaMessage = async (
     projectId,
     parsedMessage.event.user_id,
     parsedMessage.event.timestamp,
+    parsedMessage.event.session_id ?? null,
   ];
 
   const workerSpan = tracer.startSpan("kafka.message", {
@@ -139,7 +150,19 @@ const processKafkaMessage = async (
         span.setStatus({ code: SpanStatusCode.OK });
         workerSpan.setStatus({ code: SpanStatusCode.OK });
         totalEventsProcessedCounter.inc(1);
-        batchInsertionsGauge.set(1);
+        rIncr(REDIS_KEYS.EVENTS_TOTAL);
+        rIncr(REDIS_KEYS.EVENTS_WINDOW);
+
+        // Publish live event to Redis for WebSocket fan-out
+        if (redisPublisher.isReady) {
+          redisPublisher.publish(REDIS_CHANNEL_EVENTS, JSON.stringify({
+            event_name: parsedMessage.event.event_name,
+            user_id:    parsedMessage.event.user_id ?? null,
+            project_id: projectId,
+            timestamp:  parsedMessage.event.timestamp ?? new Date().toISOString(),
+          })).catch(() => { /* non-critical */ });
+        }
+
         logger.debug(
           `Kafka message inserted event=${parsedMessage.event.event_name} partition=${partition} offset=${offset} retryCount=${retryCount}`,
         );
@@ -154,6 +177,8 @@ const processKafkaMessage = async (
           code: SpanStatusCode.ERROR,
           message: "failed to process kafka message",
         });
+
+        rIncr(REDIS_KEYS.FAILED_WINDOW);
 
         if (retryCount > 0) {
           const nextRetryCount =
@@ -207,29 +232,100 @@ async function kafkaObservationConsumer() {
   try {
     await consumer.connect();
     await subscribeKafkaConsumer(consumer, ENV.KAFKA_TOPIC || KAFKA_TOPIC);
-    logger.debug("Kafka consumer connected");
+    logger.debug("Kafka batch consumer connected");
 
     await consumer.run({
-      eachMessage: async ({ topic, partition, message }) => {
-        if (!message.value) {
-          return;
-        }
+      eachBatch: async ({ batch, resolveOffset, heartbeat }) => {
+        const messages = batch.messages.filter((m) => m.value);
+        if (messages.length === 0) return;
+
+        const batchSize = messages.length;
+        rIncrBy(REDIS_KEYS.INFLIGHT, batchSize);
 
         try {
-          const parsedMessage = JSON.parse(
-            message.value.toString(),
-          ) as KafkaEvent;
-          await processKafkaMessage(
-            parsedMessage,
-            topic,
-            partition,
-            message.offset,
-            0,
+          // Deduplicate API key → project_id DB lookups
+          const apiKeyCache = new Map<string, number | null>();
+          const parsed = messages.map((msg) => ({
+            msg,
+            data: JSON.parse(msg.value!.toString()) as KafkaEvent,
+          }));
+
+          const uniqueKeys = [...new Set(parsed.map((p) => p.data.event.apiKey))];
+          await Promise.all(
+            uniqueKeys.map(async (key) => {
+              apiKeyCache.set(key, await getProjectIdByApiKey(key));
+            }),
           );
-        } catch (error) {
-          logger.error(
-            `Kafka message skipped topic=${topic} partition=${partition} offset=${message.offset}: ${String(error)}`,
-          );
+
+          const valid = parsed.filter((p) => apiKeyCache.get(p.data.event.apiKey) !== null);
+
+          if (valid.length < batchSize) {
+            logger.error(`Batch: ${batchSize - valid.length} messages skipped — unknown API key`);
+          }
+
+          if (valid.length > 0) {
+            const rows = valid.map((p) => ({
+              event_name: p.data.event.event_name,
+              metadata:   p.data.event.metadata,
+              project_id: apiKeyCache.get(p.data.event.apiKey)!,
+              user_id:    p.data.event.user_id,
+              timestamp:  p.data.event.timestamp,
+              session_id: p.data.event.session_id ?? null,
+              raw:        p,
+            }));
+
+            // Single multi-row INSERT for the whole batch
+            const values = rows.flatMap((r) => [r.event_name, r.metadata, r.project_id, r.user_id, r.timestamp, r.session_id]);
+            const placeholders = rows
+              .map((_, i) => `($${i * 6 + 1}, $${i * 6 + 2}, $${i * 6 + 3}, $${i * 6 + 4}, $${i * 6 + 5}, $${i * 6 + 6})`)
+              .join(", ");
+
+            try {
+              await db.query(`${SQL_QUERIES.BATCH_EVENT_INSERT}${placeholders}`, values);
+
+              totalEventsProcessedCounter.inc(rows.length);
+              rIncrBy(REDIS_KEYS.EVENTS_TOTAL, rows.length);
+              rIncrBy(REDIS_KEYS.EVENTS_WINDOW, rows.length);
+
+              if (redisPublisher.isReady) {
+                for (const row of rows) {
+                  redisPublisher.publish(
+                    REDIS_CHANNEL_EVENTS,
+                    JSON.stringify({
+                      event_name: row.event_name,
+                      user_id:    row.user_id ?? null,
+                      project_id: row.project_id,
+                      timestamp:  row.timestamp ?? new Date().toISOString(),
+                    }),
+                  ).catch(() => {});
+                }
+              }
+
+              logger.debug(`Batch inserted ${rows.length} events partition=${batch.partition}`);
+            } catch (error) {
+              // Whole batch failed — send each message to retry topic
+              logger.error(`Batch INSERT failed (${rows.length} events): ${String(error)}`);
+              rIncrBy(REDIS_KEYS.FAILED_WINDOW, rows.length);
+              failedInsertionsCounter.inc(rows.length);
+
+              await Promise.allSettled(
+                rows.map((row) =>
+                  publishRetryEvent(
+                    { ...row.raw.data, retryCount: RETRY_COUNT_LIMIT },
+                    batch.topic,
+                    batch.partition,
+                    row.raw.msg.offset,
+                  ),
+                ),
+              );
+            }
+          }
+
+          // Commit all offsets in this batch
+          for (const msg of messages) resolveOffset(msg.offset);
+          await heartbeat();
+        } finally {
+          rDecrBy(REDIS_KEYS.INFLIGHT, batchSize);
         }
       },
     });
@@ -253,25 +349,18 @@ async function kafkaRetryConsumer() {
 
     await consumer.run({
       eachMessage: async ({ topic, partition, message }) => {
-        if (!message.value) {
-          return;
-        }
+        if (!message.value) return;
 
+        rIncr(REDIS_KEYS.INFLIGHT);
         try {
-          const parsedMessage = JSON.parse(
-            message.value.toString(),
-          ) as RetryKafkaEvent;
-          await processKafkaMessage(
-            parsedMessage,
-            topic,
-            partition,
-            message.offset,
-            parsedMessage.retryCount,
-          );
+          const parsedMessage = JSON.parse(message.value.toString()) as RetryKafkaEvent;
+          await processKafkaMessage(parsedMessage, topic, partition, message.offset, parsedMessage.retryCount);
         } catch (error) {
           logger.error(
             `Kafka retry message skipped topic=${topic} partition=${partition} offset=${message.offset}: ${String(error)}`,
           );
+        } finally {
+          if (redisPublisher.isReady) redisPublisher.decr(REDIS_KEYS.INFLIGHT).catch(() => {});
         }
       },
     });
@@ -282,6 +371,9 @@ async function kafkaRetryConsumer() {
 
 ;(async () => {
   opentelemetrySDK.start();
+  await redisPublisher.connect().catch((e) =>
+    logger.error("Worker Redis connect failed: " + String(e))
+  );
   await ensureKafkaTopics();
   await connectKafkaProducer();
   void kafkaObservationConsumer();
