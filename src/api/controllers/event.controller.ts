@@ -13,6 +13,14 @@ import opentelemetry, {
 import { isKafkaProducerConnected, kafkaProducer } from "@/shared/lib/config/kafka";
 import { QueueEventEnvelope } from "@/shared/types/types";
 import { ENV } from "@/shared/utils/env";
+import db from "@/shared/lib/config/db";
+import { SQL_QUERIES } from "@/shared/utils/db/queries";
+
+const decodeCursor = (cursor: string): number =>
+  parseInt(Buffer.from(cursor, "base64").toString(), 10);
+
+const encodeCursor = (id: number): string =>
+  Buffer.from(id.toString()).toString("base64");
 
 const tracer = opentelemetry.trace.getTracer("eventlens-event-controller");
 
@@ -110,4 +118,42 @@ const newEvent = async (req: Request, res: Response, _next: NextFunction) => {
   });
 };
 
-export { newEvent };
+const getEvents = async (req: Request, res: Response, _next: NextFunction) => {
+  try {
+    const { project_id, event_name, user_id, from, to, cursor, limit } =
+      req.query as Record<string, string>;
+
+    if (!project_id) {
+      res.error(HTTP_CODE.BAD_REQUEST, "project_id is required");
+      return;
+    }
+
+    const parsedLimit = Math.min(parseInt(limit ?? "50", 10) || 50, 200);
+    const decodedCursor = cursor ? decodeCursor(cursor) : null;
+
+    const result = await db.query(SQL_QUERIES.GET_EVENTS, [
+      project_id,
+      event_name ?? null,
+      user_id ?? null,
+      from ?? null,
+      to ?? null,
+      decodedCursor,
+      parsedLimit + 1,
+    ]);
+
+    const rows = result.rows;
+    const hasMore = rows.length > parsedLimit;
+    const events = hasMore ? rows.slice(0, parsedLimit) : rows;
+    const nextCursor = hasMore ? encodeCursor(events[events.length - 1].id) : null;
+
+    res.success(HTTP_CODE.OK, "events fetched", {
+      events,
+      pagination: { hasMore, nextCursor, limit: parsedLimit },
+    });
+  } catch (error) {
+    logger.error("failed to fetch events: " + String(error));
+    res.error(HTTP_CODE.INTERNAL_SERVER_ERROR, "error fetching events");
+  }
+};
+
+export { newEvent, getEvents };

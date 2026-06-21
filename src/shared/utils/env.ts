@@ -20,4 +20,9 @@ export const ENV = {
   KAFKA_RETRY_CONSUMER_GROUP: process.env.KAFKA_RETRY_CONSUMER_GROUP,
   KAFKA_TOPIC_PARTITIONS: Number(process.env.KAFKA_TOPIC_PARTITIONS || 4),
   OTLP_TRACE_EXPORTER: process.env.OTLP_TRACE_EXPORTER,
+  CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+  CORS_ORIGINS: (process.env.CORS_ORIGINS ?? "http://localhost:5173")
+    .split(",")
+    .map((o) => o.trim())
+    .filter(Boolean),
 };

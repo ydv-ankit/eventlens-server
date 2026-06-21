@@ -42,3 +42,14 @@ export const KAFKA_TOPIC_PARTITIONS = 4;
 export const TOTAL_REQUESTS = "TOTAL_REQUESTS";
 export const TOTAL_EVENTS_PROCESSED = "TOTAL_EVENTS_PROCESSED";
 export const FAILED_INSERTION_COUNT = "FAILED_INSERTION_COUNT";
+
+// Redis pub/sub channels
+export const REDIS_CHANNEL_EVENTS = "events:live";
+
+// Redis atomic counter keys (written by workers, read by API server)
+export const REDIS_KEYS = {
+  EVENTS_TOTAL:   "system:events:total",   // cumulative, never reset
+  EVENTS_WINDOW:  "system:events:window",  // current 1s window, reset on read
+  FAILED_WINDOW:  "system:failed:window",  // failures in current window
+  INFLIGHT:       "system:inflight",       // messages currently being processed
+} as const;

@@ -1,7 +1,13 @@
 import express from "express";
+import cors from "cors";
+import { clerkMiddleware } from "@clerk/express";
 import projectRoutes from "@/api/routes/project.route";
 import eventRoutes from "@/api/routes/event.route";
 import metricRoutes from "@/api/routes/metric.route";
+import analyticsRoutes from "@/api/routes/analytics.route";
+import systemRoutes from "@/api/routes/system.route";
+import userRoutes from "@/api/routes/user.route";
+import { ENV } from "@/shared/utils/env";
 import logger from "@/shared/utils/logger";
 import morgan from "morgan";
 import "@/shared/utils/api-response";
@@ -18,7 +24,13 @@ const tracer = opentelemetry.trace.getTracer("eventlens-http");
 const UNTRACED_ROUTES = new Set(["/metrics", "/healthz", "/readyz"]);
 
 // middlewares
+app.use(cors({
+  origin: ENV.CORS_ORIGINS,
+  credentials: true,
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
+app.use(clerkMiddleware());
 
 const morganFormat = ":method :url :status :response-time ms";
 app.use(
@@ -121,10 +133,11 @@ app.get("/readyz", (_req, res) => {
 });
 
 app.use("/project", projectRoutes);
-
 app.use("/event", eventRoutes);
-
 app.use("/metrics", metricRoutes);
+app.use("/analytics", analyticsRoutes);
+app.use("/system", systemRoutes);
+app.use("/users", userRoutes);
 
 app.use("/*path", (req, res) => {
   res.error(HTTP_CODE.NOT_FOUND, "route not found");
