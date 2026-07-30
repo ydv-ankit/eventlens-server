@@ -7,6 +7,7 @@ API server and Kafka worker for [EventLens](https://github.com/ydv-ankit/eventle
 | Repo | Description |
 |---|---|
 | [eventlens-server](https://github.com/ydv-ankit/eventlens-server) | This repo — API, worker, and infrastructure |
+| [eventlens-UI](https://github.com/ydv-ankit/eventlens) | Client-side dashboard application to view & manage projects data |
 | [eventlens-sdk](https://github.com/ydv-ankit/eventlens-sdk) | JavaScript browser SDK (`eventlens-js` on npm) |
 
 ## Architecture
