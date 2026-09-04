@@ -54,7 +54,7 @@ services:
     restart: unless-stopped
 
   db:
-    image: postgres:alpine3.22
+    image: postgres:17-alpine
     ports:
       - "5432:5432"
     environment:
